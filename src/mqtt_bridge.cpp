@@ -183,23 +183,32 @@ bool MqttBridge::connectUpstream() {
 }
 
 static bool topicMatchesSub(const String &topic, const String &sub) {
-  if (sub == topic || sub == "#") return true;
-  if (sub.endsWith("/#")) {
-    String prefix = sub.substring(0, sub.length() - 2);
-    if (topic == prefix) return true;
-    if (topic.startsWith(prefix + "/")) return true;
-  }
-  if (sub.endsWith("/+")) {
-    String prefix = sub.substring(0, sub.length() - 2);
-    String suffix;
-    if (prefix.length() == 0) {
-      suffix = topic;
-    } else {
-      if (!topic.startsWith(prefix + "/")) return false;
-      suffix = topic.substring(prefix.length() + 1);
+  int ti = 0, si = 0;
+  int tl = topic.length(), sl = sub.length();
+
+  while (ti < tl && si < sl) {
+    if (sub[si] == '#') return true;
+    if (sub[si] == '+') {
+      // skip this level in topic
+      while (ti < tl && topic[ti] != '/') ti++;
+      si++;
+      // skip '/' delimiter in both
+      if (ti < tl && topic[ti] == '/') ti++;
+      if (si < sl && sub[si] == '/') si++;
+      continue;
     }
-    if (suffix.indexOf('/') == -1 && suffix.length() > 0) return true;
+    if (topic[ti] != sub[si]) return false;
+    ti++;
+    si++;
   }
+
+  // both exhausted
+  if (ti == tl && si == sl) return true;
+  // sub has trailing "/#"  (e.g. "device/#")
+  if (si <= sl - 2 && sub.substring(si) == "/#") return true;
+  // sub has bare "#" at current position
+  if (si < sl && sub[si] == '#') return true;
+
   return false;
 }
 
@@ -234,12 +243,12 @@ int MqttBridge::acceptClient() {
   if (plain) {
     c = new WiFiClient(plain);
   } else {
-    // Check TLS server (port 8883) for Bambu Studio clients
-    WiFiClientSecure *tls = new WiFiClientSecure(_tlsServer.accept());
-    if (tls && tls->connected()) {
-      c = tls;
-    } else {
-      delete tls;
+    // Check TLS server (port 8883) for Bambu Studio clients.
+    // Must use available() — accept() inherits from WiFiServer and returns
+    // WiFiClient without SSL context.
+    WiFiClientSecure tls = _tlsServer.available();
+    if (tls) {
+      c = new WiFiClientSecure(tls);
     }
   }
 
@@ -299,6 +308,19 @@ void MqttBridge::handleClient(int idx) {
         remaining -= chunk;
       }
       sendConnAck(c, false, 0);
+
+      // Immediately send printer identity so Bambu Studio auto-detects
+      // serial and model without needing to subscribe first.
+      if (!_pubsub.connected() && _cfg) {
+        char connResp[384];
+        int n = snprintf(connResp, sizeof(connResp),
+          "{\"info\":{\"command\":\"get_version\",\"sequence_id\":\"0\","
+          "\"version\":\"" VERSION "\",\"module\":\"%s\",\"model\":\"%s\","
+          "\"serial\":\"%s\",\"online\":\"true\"}}",
+          _cfg->printerModel, _cfg->printerModel, _cfg->printerSerial);
+        String ct = String("device/") + _cfg->gatewaySerial + "/report";
+        sendPublish(c, ct, (uint8_t *)connResp, n, 0);
+      }
       break;
     }
 
@@ -437,6 +459,32 @@ void MqttBridge::handleClient(int idx) {
       }
 
       sendSubAck(c, pid, topicCount);
+
+      // In fake printer mode (upstream disconnected), send printer identity
+      // immediately after subscribe so Bambu Studio auto-detects serial/model.
+      if (!_pubsub.connected() && _cfg) {
+        static const char reportPrefix[] = "device/";
+        String r1 = String(reportPrefix) + _cfg->gatewaySerial + "/report";
+        String r2 = String(reportPrefix) + _cfg->printerSerial + "/report";
+        for (uint8_t s = 0; s < cl.subCount; s++) {
+          String rt;
+          if (topicMatchesSub(r1, cl.subs[s].topic))
+            rt = r1;
+          else if (topicMatchesSub(r2, cl.subs[s].topic))
+            rt = r2;
+          if (rt.length() > 0) {
+            char buf[384];
+            int n = snprintf(buf, sizeof(buf),
+              "{\"info\":{\"command\":\"get_version\",\"sequence_id\":\"0\","
+              "\"version\":\"" VERSION "\",\"module\":\"%s\",\"model\":\"%s\","
+              "\"serial\":\"%s\",\"online\":\"true\"}}",
+              _cfg->printerModel, _cfg->printerModel, _cfg->printerSerial);
+            sendPublish(c, rt, (uint8_t *)buf, n, 0);
+            break;
+          }
+        }
+      }
+
       break;
     }
 

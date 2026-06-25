@@ -1,5 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 
 #include "config.h"
@@ -10,6 +11,130 @@
 MqttBridge mqtt;
 TcpProxy camProxy("camera", CAM_LOCAL_PORT, PRINTER_HOST_DFLT, CAM_PRINTER_PORT, MAX_TCP_CLIENTS);
 TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT, MAX_TCP_CLIENTS);
+
+// SSDP (Simple Service Discovery Protocol) responder for Bambu Lab auto-detection.
+// Bambu Studio discovers printers via SSDP on UDP port 2021 (non-standard).
+// See: https://github.com/maziggy/bambuddy (ssdp_server.py)
+static const uint16_t SSDP_PORT = 2021;
+static WiFiUDP _ssdpUdp;
+static bool _ssdpReady = false;
+static unsigned long _lastNotify = 0;
+static const unsigned long NOTIFY_INTERVAL = 30000; // 30 seconds
+
+static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bool isResponse) {
+  String ip = WiFi.localIP().toString();
+  if (isResponse) {
+    snprintf(buf, len,
+      "HTTP/1.1 200 OK\r\n"
+      "Server: UPnP/1.0\r\n"
+      "Location: %s\r\n"
+      "ST: urn:bambulab-com:device:3dprinter:1\r\n"
+      "USN: %s\r\n"
+      "Cache-Control: max-age=1800\r\n"
+      "DevModel.bambu.com: %s\r\n"
+      "DevName.bambu.com: BambuTagger-Gateway\r\n"
+      "DevSignal.bambu.com: -44\r\n"
+      "DevConnect.bambu.com: lan\r\n"
+      "DevBind.bambu.com: free\r\n"
+      "Devseclink.bambu.com: secure\r\n"
+      "DevInf.bambu.com: eth0\r\n"
+      "DevVersion.bambu.com: 01.07.00.00\r\n"
+      "DevCap.bambu.com: 1\r\n"
+      "\r\n",
+      ip.c_str(), cfg->gatewaySerial, cfg->printerModel);
+  } else {
+    snprintf(buf, len,
+      "NOTIFY * HTTP/1.1\r\n"
+      "Host: 239.255.255.250:1990\r\n"
+      "Server: UPnP/1.0\r\n"
+      "Location: %s\r\n"
+      "NT: urn:bambulab-com:device:3dprinter:1\r\n"
+      "NTS: ssdp:alive\r\n"
+      "USN: %s\r\n"
+      "Cache-Control: max-age=1800\r\n"
+      "DevModel.bambu.com: %s\r\n"
+      "DevName.bambu.com: BambuTagger-Gateway\r\n"
+      "DevSignal.bambu.com: -44\r\n"
+      "DevConnect.bambu.com: lan\r\n"
+      "DevBind.bambu.com: free\r\n"
+      "Devseclink.bambu.com: secure\r\n"
+      "DevInf.bambu.com: eth0\r\n"
+      "DevVersion.bambu.com: 01.07.00.00\r\n"
+      "DevCap.bambu.com: 1\r\n"
+      "\r\n",
+      ip.c_str(), cfg->gatewaySerial, cfg->printerModel);
+  }
+}
+
+// Send SSDP NOTIFY alive announcement via broadcast.
+static void sendSSDPNotify(const GatewayConfig *cfg) {
+  if (!_ssdpReady) return;
+  char msg[512];
+  buildSsdpmessage(cfg, msg, sizeof(msg), false);
+  IPAddress bcast(255, 255, 255, 255);
+  _ssdpUdp.beginPacket(bcast, SSDP_PORT);
+  _ssdpUdp.write((const uint8_t *)msg, strlen(msg));
+  _ssdpUdp.endPacket();
+}
+
+// Start SSDP responder: bind to port 2021 and join the Bambu multicast group.
+static void startSSDP(const GatewayConfig *cfg) {
+  if (_ssdpReady) return;
+  IPAddress local = WiFi.localIP();
+  if (local == IPAddress(0, 0, 0, 0)) return;
+
+  if (_ssdpUdp.beginMulticast(local, IPAddress(239, 255, 255, 250), SSDP_PORT)) {
+    _ssdpReady = true;
+    Serial.println("SSDP: listening on port 2021 (multicast 239.255.255.250)");
+    sendSSDPNotify(cfg);
+    _lastNotify = millis();
+  } else {
+    Serial.println("SSDP: failed to start");
+  }
+}
+
+static void stopSSDP() {
+  if (_ssdpReady) {
+    _ssdpUdp.stop();
+    _ssdpReady = false;
+  }
+}
+
+// Handle incoming SSDP messages (M-SEARCH) and send periodic NOTIFY broadcasts.
+static void loopSSDP(const GatewayConfig *cfg) {
+  if (!_ssdpReady) return;
+
+  // Check for incoming M-SEARCH packets
+  int packetSize = _ssdpUdp.parsePacket();
+  if (packetSize > 0) {
+    char buf[512];
+    int len = _ssdpUdp.read(buf, sizeof(buf) - 1);
+    if (len > 0) {
+      buf[len] = '\0';
+      String msg(buf);
+
+      // Respond if this is an M-SEARCH for Bambu printers or ssdp:all
+      if (msg.indexOf("M-SEARCH") >= 0 &&
+          (msg.indexOf("urn:bambulab-com:device:3dprinter:1") >= 0 ||
+           msg.indexOf("ssdp:all") >= 0)) {
+        char resp[512];
+        buildSsdpmessage(cfg, resp, sizeof(resp), true);
+        _ssdpUdp.beginPacket(_ssdpUdp.remoteIP(), _ssdpUdp.remotePort());
+        _ssdpUdp.write((const uint8_t *)resp, strlen(resp));
+        _ssdpUdp.endPacket();
+        Serial.printf("SSDP: responded to M-SEARCH from %s\n",
+                      _ssdpUdp.remoteIP().toString().c_str());
+      }
+    }
+  }
+
+  // Send periodic NOTIFY broadcasts
+  unsigned long now = millis();
+  if (now - _lastNotify >= NOTIFY_INTERVAL) {
+    _lastNotify = now;
+    sendSSDPNotify(cfg);
+  }
+}
 
 static void startAP() {
   WiFi.softAPConfig(GATEWAY_AP_IP, GATEWAY_AP_IP, GATEWAY_AP_SUBNET);
@@ -100,7 +225,7 @@ void setup() {
   ftpsProxy.begin();
 
   char mdnsName[64];
-  snprintf(mdnsName, sizeof(mdnsName), "Bambu-%s", cfg->printerSerial);
+  strcpy(mdnsName, "BambuTagger-Gateway");
   if (MDNS.begin(mdnsName)) {
     MDNS.addService("mqtt", "tcp", MQTT_LOCAL_PORT);
     MDNS.addService("http", "tcp", 80);
@@ -126,6 +251,7 @@ void setup() {
   if (WiFi.isConnected()) {
     Serial.print("Station IP: ");
     Serial.println(WiFi.localIP());
+    startSSDP(cfg);
   }
   Serial.println("Ready.");
 }
@@ -139,4 +265,18 @@ void loop() {
   ArduinoOTA.handle();
   MDNS.update();
   ledLoop();
+
+  GatewayConfig *cfg = webconfigGetConfig();
+
+  // Manage SSDP lifecycle: start on station connect, stop on disconnect
+  static bool wasStaUp = false;
+  bool staUp = WiFi.isConnected();
+  if (staUp && !wasStaUp) {
+    startSSDP(cfg);
+  } else if (!staUp && wasStaUp) {
+    stopSSDP();
+  }
+  wasStaUp = staUp;
+
+  loopSSDP(cfg);
 }
