@@ -99,13 +99,19 @@ void setup() {
   camProxy.begin();
   ftpsProxy.begin();
 
-  if (MDNS.begin("BambuTagger-Gateway")) {
+  char mdnsName[64];
+  snprintf(mdnsName, sizeof(mdnsName), "Bambu-%s", cfg->printerSerial);
+  if (MDNS.begin(mdnsName)) {
     MDNS.addService("mqtt", "tcp", MQTT_LOCAL_PORT);
     MDNS.addService("http", "tcp", 80);
+    MDNS.addService("bambu", "tcp", MQTT_PRINTER_PORT);
+    MDNS.addServiceTxt("bambu", "tcp", "serial", cfg->printerSerial);
+    MDNS.addServiceTxt("bambu", "tcp", "model", cfg->printerModel);
+    MDNS.addServiceTxt("bambu", "tcp", "version", VERSION);
   }
 
   // OTA update server
-  ArduinoOTA.setHostname("BambuTagger-Gateway");
+  ArduinoOTA.setHostname(mdnsName);
   ArduinoOTA.onStart([]() { Serial.println("OTA: start"); });
   ArduinoOTA.onEnd([]() { Serial.println("OTA: end"); });
   ArduinoOTA.onError([](ota_error_t err) {
