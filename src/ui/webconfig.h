@@ -362,7 +362,7 @@ static String buildSettings() {
   page.replace("%%PRINTER_SERIAL%%", _cfg.printerSerial);
 
   String opts;
-  const char *models[] = {"P1S", "P1P", "X1C", "X1E", "A1", "A1 Mini"};
+  const char *models[] = {"P1S", "P1P", "P2S", "X1C", "X1E", "A1", "A1 Mini", "A2L"};
   for (auto m : models) {
     opts += "<option";
     if (strcmp(_cfg.printerModel, m) == 0) opts += " selected";

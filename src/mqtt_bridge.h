@@ -31,7 +31,7 @@ public:
   MqttStatus getStatus();
 
 private:
-  WiFiClientSecure _upTcp;
+  WiFiClientSecure *_upTcp = nullptr;
   PubSubClient _pubsub;
   WiFiServer _localServer;
   MqttClientCtx _clients[MAX_MQTT_CLIENTS];

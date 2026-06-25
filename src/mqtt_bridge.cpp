@@ -20,7 +20,7 @@ MqttBridge::MqttBridge()
   snprintf(localReportTopic, sizeof(localReportTopic), MQTT_REPORT_TOPIC, PRINTER_SERIAL_DFLT);
   snprintf(localRequestTopic, sizeof(localRequestTopic), MQTT_REQUEST_TOPIC, PRINTER_SERIAL_DFLT);
 
-  _pubsub.setClient(_upTcp);
+  _pubsub.setClient(*_upTcp);
   _pubsub.setBufferSize(MQTT_BUFFER_SIZE);
   _pubsub.setCallback([this](char *t, uint8_t *p, unsigned int l) {
     onUpstreamMessage(t, p, l);
@@ -44,8 +44,7 @@ void MqttBridge::loop() {
   if (!_pubsub.connected()) {
     // Don't attempt upstream MQTT until printer is configured and station WiFi is up
     if (!WiFi.isConnected()) return;
-    if (_cfg && (strlen(_cfg->printerHost) == 0
-        || strcmp(_cfg->printerHost, PRINTER_HOST_DFLT) == 0)) return;
+    if (_cfg && strlen(_cfg->printerHost) == 0) return;
 
     unsigned long now = millis();
     if (now - _lastReconnect > 5000) {
@@ -87,8 +86,7 @@ MqttStatus MqttBridge::getStatus() {
   if (_pubsub.connected()) return MQTT_UP;
   // Printer is on LAN — unreachable when station WiFi is down
   if (!WiFi.isConnected()) return MQTT_IDLE;
-  if (_cfg && strlen(_cfg->printerHost) > 0
-      && strcmp(_cfg->printerHost, PRINTER_HOST_DFLT) != 0) {
+  if (_cfg && strlen(_cfg->printerHost) > 0) {
     return MQTT_TRYING;
   }
   return MQTT_IDLE;
@@ -99,10 +97,15 @@ MqttStatus MqttBridge::getStatus() {
 // ------------------------------------------------------------------
 bool MqttBridge::connectUpstream() {
   if (!_cfg) return false;
-  _upTcp.stop();
-  _upTcp.setInsecure();
-  _upTcp.setTimeout(10000);
-  if (!_upTcp.connect(_cfg->printerHost, MQTT_PRINTER_PORT)) return false;
+  delete _upTcp;
+  _upTcp = new WiFiClientSecure();
+  _upTcp->setInsecure();
+  _upTcp->setTimeout(10000);
+  if (!_upTcp->connect(_cfg->printerHost, MQTT_PRINTER_PORT)) {
+    delete _upTcp; _upTcp = nullptr;
+    return false;
+  }
+  _pubsub.setClient(*_upTcp);
 
   char willTopic[64];
   snprintf(willTopic, sizeof(willTopic), "device/%s/status", _cfg->printerSerial);
