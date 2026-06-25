@@ -6,55 +6,58 @@ static char localReportTopic[64];
 static char localRequestTopic[64];
 
 // Self-signed cert + key for local TLS MQTT broker (port 8883).
-// Bambu Studio requires TLS on port 8883 to identify the printer.
+// Bambu Studio requires TLS on port 8883 to connect to a printer.
+// CN=BambuTagger-Gateway, O=BBL Technologies Co., Ltd, C=CN
 static const char tls_cert[] PROGMEM = R"KEY(
 -----BEGIN CERTIFICATE-----
-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
+MIIDHDCCAgQCCQCSPYnNTygjjjANBgkqhkiG9w0BAQsFADBPMRwwGgYDVQQDDBNC
+YW1idVRhZ2dlci1HYXRld2F5MSIwIAYDVQQKDBlCQkwgVGVjaG5vbG9naWVzIENv
+LiwgTHRkMQswCQYDVQQGEwJDTjAgFw0yNjA2MjUyMzEzMzNaGA8yMTI2MDYwMTIz
+MTMzM1owTzEcMBoGA1UEAwwTQmFtYnVUYWdnZXItR2F0ZXdheTEiMCAGA1UECgwZ
+QkJMIFRlY2hub2xvZ2llcyBDby4sIEx0ZDELMAkGA1UEBhMCQ04wggEiMA0GCSqG
+SIb3DQEBAQUAA4IBDwAwggEKAoIBAQDt+k3w/I1iWZlsxpVP14bR9Obcp8kZnsi6
+UoB5NQyerqo2IZWvqY7nWtLoJhd0xJnZJ4qBE62zLg5e6ohSCvnIFBIsMZOz68oV
+U0PtxMu7QNm910NnGq8GNyMw9Pitds0krd7onqC+9y6izG1LBiWxwF4XWszLWhna
+ZGrrfQQ4g2vLq4F7vcgR09pWWo24fDK1acfxdp6Ty9YsU4IN4qyXWf3dQKLhKobv
+hMKRD0dE1DHMmR9wpXOddbt9qqeifsiBO89WgXrjzG1EG6Do9RawUonmddfYW0Zb
+9i+qlnvALANtZsW9yThcA4RkWvnxmQ3a3ksnl2YWIjQ84jgGpmUPAgMBAAEwDQYJ
+KoZIhvcNAQELBQADggEBACyBkE6dPWRF2wosO5TcCSnAEGaN6GpirpGPoVXzuV2c
+qFVsTBaTHe+Q7IzVpwpuU5zai4JD0xqPgaUMW51hmSNvsRD7sT+ITHwOT5pxDaP5
++8cNYmpSdtmsb3M9UPHdERY0Fjk5Ou8W8o+UEYY7Uw64MI/02RW5ZGQ5LdoUjFIf
+NEu9fcq7jTtNcv6ny0N8+KYPCPquylsXgwmcGn5rRFwz/n/rppjkkr++7w28eQc8
+OXyzBGcku6lelspXofoNAAGBs/CUDQr9GioepLbTNilF3ohVyOzyecZIB/EOTPng
+esz4VbvkltwfJfZNMaN6ZEmR3INAy7G9TYXdfZRCSMg=
 -----END CERTIFICATE-----
 )KEY";
 
 static const char tls_key[] PROGMEM = R"KEY(
 -----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCqjMkZLmgQOOGZ
-OINmbOfvbrXaBW+RBSkdydIzeyqWfKo1gb13Hk21XOpcRrLtuc/Z2qk8sWoPyc0Y
-3fAZoIffQG4XLQbfrrwtIxU00naBUlwON72U5xBhTn202RrTWbzFLNopi0n4Xkxo
-rgjEXDfzOrOf/cABg9rJ4IaX7JIdqxkC4vycWA0aUtHT3hzuObdl+x/xTQcMekIr
-OGsr/BwAbpC77QkZl/U1lpD5pDKWWy7cbGwmGaCAgX+0xdufTbuB8FwmrE/isvUo
-/AeAfniabyhTnfa4y16870Rd8Aqs0XpZzyRswBzEWdUKrBB+q3ccFMUIJhTlfT6o
-6bPeRztBAgMBAAECggEAc96UXZxOrP7IHp3rf/HrnZrcx9O7mY4lAgz0128NXxIx
-XYrYmw4mg1ouCyUpOSNtWDgblJWAVlunEQbvsamDxiRy5yH7Mor3Y78bEDkQtAmt
-aydpkLlvQnzeILkDZaXo/xja2zC7v5bpWJEseaOhi4lNMhxmj2DyiwcUyjC6kJZq
-yBnZ8zkrYWeKozZJbhQlRvNsduQrXToCYOzcoCt8Pu0kL+1G17VBWtICajsdZ8AF
-9zIhIllKmWIgz+dcjkZJDkST0HufOafj4BIA2NJZaauJWOBfeYFbSdqxUPkwsKyr
-1MHA4fLHw43bD9sTZompXyLCCsTVpAefDaVJ5VlfAQKBgQDSq0cmlx3nUfEweVlH
-oby36E3e4ZegZXoaxyz7ura4Lt/sWQ6cC30jHeLH25VRJj92n5q+EweLYBpdCz2N
-qcQXGWgbzu3+11cNAIe4zht1PYtVMff1txM37N5AGnB+j4Ji/5pySlAlAD7GQXd2
-1w/McvHwEz73UJ58dvyijqlgUQKBgQDPP4sJE4UYewzLhb0oe0labnQfuq+ZIxpl
-sBfMq/TUhnQ3Zw1H2Ap5aSAv05YnLlwAaSjFz89C30GGukwWJ+M8axNeIA5l/Q2r
-VtY9ju8JevRsdXYwPAVjC0x6Ulor1qxdHYQDawQovTDubdIkmHOq1xAdr5BG/aMx
-RQS34N3f8QKBgDAV9kyhq6q0MnhdCnrmOPxFYxjfp0tuPjvEgMkIqlJKKMR643HM
-0YhldvElduSp9UxvS9Pc5hjzG7FnMmqWeHLJUtEeH4bOwkjueQw+x1ewb5BHspB8
-dD+MqoI5RrosqZdNPoSd38NCVhHMuab/mdSR3BVvXyz2UuaYBjxYkeKxAoGAKDIz
-3jvJ+biL/8FdscdPr9lybmEAA9yaFxTzWMAVSU8WpVQ4cDHHvkqUcpJAMjM8ptu+
-i7dFhLvWcrIZZcawvRwrcnsXL9LH3u6FuQTK+fS+CXcyyCIsDUy4tZTZZl1Jqvm5
-jAwqj1g6cFQeiPiEnqL9vjQ58HrrNvgi9SMJBZECgYEAwqw7bFgLLg14GVB+YXd1
-IxNX8EU1T3GHxsSPzVeAnlk2aBh3zOJhMq2BS0Uj24w61NIPHHyUDdLzijHchVUT
-38qimAc5tpMFOcos3RtTRrbmN5w/9hsg3GGM0oPRzPzGX3w1BMoNjU9tITXgRed9
-Kl1ubZ1gAgLRCsU8AYNQrZM=
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDt+k3w/I1iWZls
+xpVP14bR9Obcp8kZnsi6UoB5NQyerqo2IZWvqY7nWtLoJhd0xJnZJ4qBE62zLg5e
+6ohSCvnIFBIsMZOz68oVU0PtxMu7QNm910NnGq8GNyMw9Pitds0krd7onqC+9y6i
+zG1LBiWxwF4XWszLWhnaZGrrfQQ4g2vLq4F7vcgR09pWWo24fDK1acfxdp6Ty9Ys
+U4IN4qyXWf3dQKLhKobvhMKRD0dE1DHMmR9wpXOddbt9qqeifsiBO89WgXrjzG1E
+G6Do9RawUonmddfYW0Zb9i+qlnvALANtZsW9yThcA4RkWvnxmQ3a3ksnl2YWIjQ8
+4jgGpmUPAgMBAAECggEAQ+DCPHt8xFG0Lk+SJRzfiqFk/AkrlhAxRtvjYy8bc2N0
+j04TCPC/HwRL5gV/aUHuc/8QRXLcd6AqXy5cRbJ1vnjjGhHmBEq78Es4s+gPCFEe
+CkUNJ6p3w7kUY5FsIOYi61RgoU8loHKWrb7LabvOIp4w+E5g3ZvMhftgd9zHyGo/
+FV8LK27AalDTNV/ZGaan61+NaoLOd31D/UwCtPtyjyrEvOVmzEoBPjAlsInJ67rv
+AhnPt+HkGKvxFkx1d4WshqO13Y5uwOgpEMPmUrWSwYZxe7Te0HSImOMKSQzWqReD
+V3qrhhplLHQy/4QJ3vfmjN6bS/ulhPH3PyXgU1vIgQKBgQD4MtjEOuOuhcZQAVoN
+Hxyohzf39fgAgMn7PglWhltGHuJQaRItjE5eYltYKPVJUzO9pDeMcr77TtASBORF
+ZYsyrhBOu0RlxfzAiP5OewkPEF9/RK6UM4qNFvltudmb2EfZsGNbF6+H2F2xI9fI
+HMxesifLn0aoiRi2cZR16mF/zwKBgQD1dTbsmp+f1sh0rXT8N3wkB3/1c3IdQV5N
+qNexmm0EL+S0WNSqJL0TxgSXcKQA6JcQBQlzFjNTjlCCj6NXbtqh4sdpouPXgwgq
+tkDYdCQTsE/oL+LdvDAYQIOYig0eDfX86jFgegDwXLw5VpMW1p/FdSRwZ7jevUqf
+PFceflLWwQKBgHd2Qc9xaNU/nkwz2lwmdWzIaK/4u/3B/3XmTihPUu9VPijl6dHy
+jmXvgXfVfvpkCatltzbqo/Hh5VRG9nhQf8dM8Jx0ll9GBHnHdl/f6GRPxSdEr6K1
+jCKMxFGD+rGAUFT/CVN2+w2vnqj8T4gKFHQf2/euGhxUoIhv8r0uqu8RAoGALqnA
+7kwa6n0fkKblJYm6zPKsDdKLsCocLnFZyAbOkMw2E18L1uizFU5A0zVzyERva3k5
+qapfyZO1lIyQBfAqGjqNpHR2EiNz6wLI4x15OlD7b+2imHrNPd8N5XLhOYR37kPr
+bSbkhM1sbw4ZWm8k4pn5enENgTLFO+5xtXdYckECgYB0KtAryKxyHLjoMVYDG4OL
+1VwRD8SDctGbKAXTAdFIXDTNJLF02cnuy+6Ia19XASSUny0ufgKvIH5GZFH2bG+3
+k9DT283LYghp/HB/miXqHh3LsnmeN4OPoVkt6QbekusrmTU7aywXW58R55V0FipG
+PUf6IGSISe42klHcnBnuLg==
 -----END PRIVATE KEY-----
 )KEY";
 
@@ -99,6 +102,11 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   _tlsServer.setRSACert(&cert, &key);
   _tlsServer.begin();
   _tlsServer.setNoDelay(true);
+  Serial.println("TLS: server ready on port 8883");
+}
+
+const char *MqttBridge::getTlsCert() {
+  return tls_cert;
 }
 
 void MqttBridge::loop() {
@@ -243,10 +251,8 @@ int MqttBridge::acceptClient() {
   if (plain) {
     c = new WiFiClient(plain);
   } else {
-    // Check TLS server (port 8883) for Bambu Studio clients.
-    // Must use available() — accept() inherits from WiFiServer and returns
-    // WiFiClient without SSL context.
-    WiFiClientSecure tls = _tlsServer.available();
+    // Check TLS server (port 8883) for Bambu Studio clients
+    WiFiClientSecure tls = _tlsServer.accept();
     if (tls) {
       c = new WiFiClientSecure(tls);
     }

@@ -2,6 +2,7 @@
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+#include <lwip/igmp.h>
 
 #include "config.h"
 #include "ui/webconfig.h"
@@ -13,13 +14,14 @@ TcpProxy camProxy("camera", CAM_LOCAL_PORT, PRINTER_HOST_DFLT, CAM_PRINTER_PORT,
 TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT, MAX_TCP_CLIENTS);
 
 // SSDP (Simple Service Discovery Protocol) responder for Bambu Lab auto-detection.
-// Bambu Studio discovers printers via SSDP on UDP port 2021 (non-standard).
-// See: https://github.com/maziggy/bambuddy (ssdp_server.py)
+// Bambu Studio discovers printers via SSDP on UDP port 2021.
+// Real printers broadcast NOTIFY every ~10s to 255.255.255.255:2021.
+// They also respond to M-SEARCH sent to multicast 239.255.255.250:2021.
 static const uint16_t SSDP_PORT = 2021;
 static WiFiUDP _ssdpUdp;
 static bool _ssdpReady = false;
 static unsigned long _lastNotify = 0;
-static const unsigned long NOTIFY_INTERVAL = 30000; // 30 seconds
+static const unsigned long NOTIFY_INTERVAL = 10000;
 
 static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bool isResponse) {
   String ip = WiFi.localIP().toString();
@@ -75,22 +77,39 @@ static void sendSSDPNotify(const GatewayConfig *cfg) {
   _ssdpUdp.beginPacket(bcast, SSDP_PORT);
   _ssdpUdp.write((const uint8_t *)msg, strlen(msg));
   _ssdpUdp.endPacket();
+  Serial.printf("SSDP: NOTIFY %s (%s) on %s\n", cfg->gatewaySerial, cfg->printerModel, WiFi.localIP().toString().c_str());
 }
 
-// Start SSDP responder: bind to port 2021 and join the Bambu multicast group.
+// Start SSDP responder: bind UDP port 2021, join the SSDP multicast group,
+// and send initial NOTIFY broadcasts for quick discovery.
 static void startSSDP(const GatewayConfig *cfg) {
   if (_ssdpReady) return;
   IPAddress local = WiFi.localIP();
   if (local == IPAddress(0, 0, 0, 0)) return;
 
-  if (_ssdpUdp.beginMulticast(local, IPAddress(239, 255, 255, 250), SSDP_PORT)) {
-    _ssdpReady = true;
-    Serial.println("SSDP: listening on port 2021 (multicast 239.255.255.250)");
-    sendSSDPNotify(cfg);
-    _lastNotify = millis();
-  } else {
-    Serial.println("SSDP: failed to start");
+  if (!_ssdpUdp.begin(SSDP_PORT)) {
+    Serial.println("SSDP: failed to bind port 2021");
+    return;
   }
+
+  // Join the SSDP multicast group (239.255.255.250) so we hear M-SEARCH queries
+  // from Bambu Studio.  This mirrors the approach used by the ESP8266SSDP library.
+  IPAddress mcast(239, 255, 255, 250);
+  if (igmp_joingroup(local, mcast) == ERR_OK) {
+    Serial.println("SSDP: joined multicast 239.255.255.250");
+  } else {
+    Serial.println("SSDP: WARNING multicast join failed — NOTIFY-only mode");
+  }
+
+  _ssdpReady = true;
+  Serial.printf("SSDP: listening on UDP port %d\n", SSDP_PORT);
+
+  // Rapid initial NOTIFY bursts for quick discovery
+  for (int i = 0; i < 5; i++) {
+    sendSSDPNotify(cfg);
+    delay(200);
+  }
+  _lastNotify = millis();
 }
 
 static void stopSSDP() {
@@ -268,10 +287,12 @@ void loop() {
 
   GatewayConfig *cfg = webconfigGetConfig();
 
-  // Manage SSDP lifecycle: start on station connect, stop on disconnect
+  // Manage SSDP lifecycle: start on station connect, stop on disconnect.
+  // Small delay to let the WiFi stack settle after (re)connecting.
   static bool wasStaUp = false;
   bool staUp = WiFi.isConnected();
   if (staUp && !wasStaUp) {
+    delay(500);
     startSSDP(cfg);
   } else if (!staUp && wasStaUp) {
     stopSSDP();

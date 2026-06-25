@@ -91,6 +91,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
     <div class="info-row"><span class="lbl">IP</span><span class="val">%%STA_IP%%</span></div>
     <div class="info-row"><span class="lbl">Serial</span><span class="val">%%GATEWAY_SERIAL%%</span></div>
     <div class="info-row"><span class="lbl">Model</span><span class="val">%%PRINTER_MODEL%%</span></div>
+    <div class="info-row"><span class="lbl">TLS Cert</span><span class="val"><a href="/cert" style="color:#58a6ff;text-decoration:none">Import &rarr;</a></span></div>
   </div>
 </div>
 </div>
@@ -567,6 +568,77 @@ static void handleLogo() {
   _server.send_P(200, "image/png", (const char*)logo_png, sizeof(logo_png));
 }
 
+// ── Cert page ───────────────────────────────────────────────────────────
+static const char _PAGE_CERT[] PROGMEM = R"html(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BambuTagger-Gateway — TLS Certificate</title>
+<style>
+)html";
+
+static const char _PAGE_CERT2[] PROGMEM = R"html(
+</style>
+</head>
+<body>
+<header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
+<nav>
+<a href="/">Dashboard</a>
+<a href="/config/settings">Printer</a>
+<a href="/config/wifi">WiFi</a>
+<a href="/config/ota">Update</a>
+</nav>
+<div class="wrapper">
+<div class="card" style="max-width:560px">
+  <h2>TLS Certificate</h2>
+  <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
+    Bambu Studio and OrcaSlicer verify the TLS certificate presented
+    by the printer against their bundled BBL CA. Because this gateway
+    uses a self-signed certificate, you must import it into the
+    slicer before you can connect via LAN (port 8883).
+  </p>
+  <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
+    Bambu Studio and OrcaSlicer verify the TLS certificate against a
+    bundled <code>printer.cer</code> file — they do <strong>not</strong>
+    use the system certificate store. To trust this gateway, append the
+    downloaded cert to that file with a text editor:<br><br>
+    <strong>macOS</strong>:<br>
+    <code style="font-size:11px">sudo nano /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer</code><br>
+    <small>(OrcaSlicer: <code style="font-size:11px">/Applications/OrcaSlicer.app/Contents/Resources/cert/printer.cer</code>)</small><br><br>
+    <strong>Windows</strong>:<br>
+    <code style="font-size:11px">Notepad as admin: C:\Program Files\Bambu Studio\resources\cert\printer.cer</code><br>
+    <small>(OrcaSlicer: <code style="font-size:11px">C:\Program Files\OrcaSlicer\resources\cert\printer.cer</code>)</small><br><br>
+    Paste the contents of <code>gateway-ca.pem</code> at the end of the
+    file, save, and restart the slicer.
+  </p>
+  <a href="/cert?dl=1" style="display:inline-block;padding:10px 20px;margin:0 0 6px;background:#238636;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">Download gateway-ca.pem</a>
+  <p style="margin:12px 0 0;font-size:11px;color:#484f58">
+    Gateway serial: %%GATEWAY_SERIAL%%
+  </p>
+</div>
+</div>
+<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
+</body>
+</html>
+)html";
+
+// Serve the TLS CA certificate page (or download the PEM with ?dl=1).
+static void handleCert() {
+  if (!_server.hasArg("dl")) {
+    String page = buildPage(_PAGE_CERT, _PAGE_CERT2);
+    page.replace("%%VERSION%%", VERSION);
+    page.replace("%%GATEWAY_SERIAL%%", _cfg.gatewaySerial);
+    _server.send(200, "text/html", page);
+    return;
+  }
+  const char *pem = MqttBridge::getTlsCert();
+  _server.sendHeader("Content-Disposition",
+                      "attachment; filename=gateway-ca.pem");
+  _server.send_P(200, "application/x-pem-file", pem, strlen_P(pem));
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 
 inline void webconfigBegin() {
@@ -574,6 +646,7 @@ inline void webconfigBegin() {
 
   _server.on("/", handleRoot);
   _server.on("/Logo/bambutagger.png", handleLogo);
+  _server.on("/cert", handleCert);
   _server.on("/config", []() {
     _server.sendHeader("Location", "/config/settings", true);
     _server.send(302, "text/plain", "");

@@ -30,6 +30,9 @@ public:
   bool isConnected();
   MqttStatus getStatus();
 
+  // TLS certificate PEM (for web UI download — user imports into Bambu Studio)
+  static const char *getTlsCert();
+
 private:
   WiFiClientSecure *_upTcp = nullptr;
   PubSubClient _pubsub;
@@ -54,7 +57,6 @@ private:
   static bool readBytes(WiFiClient &c, uint8_t *buf, uint32_t len);
   static void writeRemainingLength(WiFiClient &c, uint32_t len);
 
-  // MQTT packet construction
   void sendConnAck(WiFiClient &c, bool sp, uint8_t rc);
   void sendSubAck(WiFiClient &c, uint16_t pid, uint8_t count);
   void sendUnsubAck(WiFiClient &c, uint16_t pid);
