@@ -1,4 +1,4 @@
-# BambuTagger-Gateway
+# <img alt="logo" src="Logo/bambutagger.png" height="36" /> BambuTagger-Gateway
 
 Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by multiplexing MQTT, camera, and FTPS traffic through a single ESP8266 gateway.
 

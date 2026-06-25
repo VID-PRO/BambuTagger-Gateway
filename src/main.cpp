@@ -1,5 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <ArduinoOTA.h>
 
 #include "config.h"
 #include "webconfig.h"
@@ -43,7 +44,7 @@ static void manageAP() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n\nBambuTagger Gateway v1.0");
+  Serial.println("\n\nBambuTagger Gateway " VERSION);
 
   // load runtime config from EEPROM
   webconfigBegin();
@@ -72,6 +73,15 @@ void setup() {
     MDNS.addService("http", "tcp", 80);
   }
 
+  // OTA update server
+  ArduinoOTA.setHostname("BambuTagger-Gateway");
+  ArduinoOTA.onStart([]() { Serial.println("OTA: start"); });
+  ArduinoOTA.onEnd([]() { Serial.println("OTA: end"); });
+  ArduinoOTA.onError([](ota_error_t err) {
+    Serial.printf("OTA: error %d\n", err);
+  });
+  ArduinoOTA.begin();
+
   Serial.print("Gateway AP: ");
   Serial.println(GATEWAY_AP_SSID);
   Serial.print("AP IP: ");
@@ -89,5 +99,6 @@ void loop() {
   mqtt.loop();
   camProxy.loop();
   ftpsProxy.loop();
+  ArduinoOTA.handle();
   MDNS.update();
 }

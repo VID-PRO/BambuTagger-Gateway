@@ -2,6 +2,8 @@
 
 #include <ESP8266WiFi.h>
 
+#define VERSION "1.0.0"
+
 // ── Runtime config (stored in EEPROM) ─────────────────────────────────
 #pragma pack(push, 1)
 struct GatewayConfig {

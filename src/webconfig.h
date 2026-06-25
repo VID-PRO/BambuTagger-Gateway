@@ -3,6 +3,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
+#include <Updater.h>
 #include "config.h"
 #include "logo_png.h"
 #include "mqtt_bridge.h"
@@ -66,6 +67,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 <nav>
 <a href="/" class="active">Dashboard</a>
 <a href="/config/settings">Settings</a>
+<a href="/config/ota">OTA Update</a>
 </nav>
 <div class="wrapper">
 <div class="card" style="max-width:560px">
@@ -78,6 +80,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
     <div class="info-row"><span class="lbl">MQTT Link</span><span class="val">%%MQTT_STATUS%%</span></div>
     <div class="info-row"><span class="lbl">Uptime</span><span class="val">%%UPTIME%%</span></div>
     <div class="info-row"><span class="lbl">Free Heap</span><span class="val">%%HEAP%%</span></div>
+    <div class="info-row"><span class="lbl">Version</span><span class="val">%%VERSION%%</span></div>
   </div>
   </div>
 </div>
@@ -91,7 +94,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 .info-row .val.mid{color:#d29922}
 .info-row .val.down{color:#da3633}
 </style>
-<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway</a> &mdash; MIT License</footer>
+<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
 </body>
 </html>
 )html";
@@ -115,6 +118,7 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
 <nav>
 <a href="/">Dashboard</a>
 <a href="/config/settings" class="active">Settings</a>
+<a href="/config/ota">OTA Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
@@ -137,7 +141,7 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
   </form>
 </div>
 </div>
-<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway</a> &mdash; MIT License</footer>
+<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
 </body>
 </html>
 )html";
@@ -161,6 +165,7 @@ static const char _PAGE_WIFI2[] PROGMEM = R"html(
 <nav>
 <a href="/">Dashboard</a>
 <a href="/config/settings" class="active">Settings</a>
+<a href="/config/ota">OTA Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
@@ -178,7 +183,44 @@ static const char _PAGE_WIFI2[] PROGMEM = R"html(
   </form>
 </div>
 </div>
-<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway</a> &mdash; MIT License</footer>
+<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
+</body>
+</html>
+)html";
+
+// ── OTA Update page ────────────────────────────────────────────────────
+static const char _PAGE_OTA[] PROGMEM = R"html(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BambuTagger-Gateway — OTA Update</title>
+<style>
+)html";
+
+static const char _PAGE_OTA2[] PROGMEM = R"html(
+</style>
+</head>
+<body>
+<header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
+<nav>
+<a href="/">Dashboard</a>
+<a href="/config/settings">Settings</a>
+<a href="/config/ota" class="active">OTA Update</a>
+</nav>
+<div class="wrapper">
+<div class="card">
+  <h2>Firmware Update</h2>
+  <p style="color:#8b949e;font-size:13px;margin-bottom:16px">Upload a <code>.bin</code> firmware file to update the gateway. The device will reboot after a successful update.</p>
+  <form method="post" action="/update" enctype="multipart/form-data">
+    <label>Firmware binary</label>
+    <input type="file" name="firmware" accept=".bin" required>
+    <button type="submit">Upload &amp; Update</button>
+  </form>
+</div>
+</div>
+<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
 </body>
 </html>
 )html";
@@ -216,7 +258,7 @@ footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:6px;font
   <p style="margin-top:12px;font-size:.85em">Reconnecting in 15 seconds&hellip;</p>
 </div>
 </div>
-<footer>BambuTagger-Gateway &mdash; MIT License</footer>
+<footer>BambuTagger-Gateway v%%VERSION%% &mdash; MIT License</footer>
 </body>
 </html>
 )html";
@@ -289,6 +331,13 @@ static String buildRoot() {
     (int)((secs % 3600) / 60), (int)(secs % 60));
   page.replace("%%UPTIME%%", upt);
   page.replace("%%HEAP%%", String(ESP.getFreeHeap()) + " B");
+  page.replace("%%VERSION%%", VERSION);
+  return page;
+}
+
+static String buildOta() {
+  String page = buildPage(_PAGE_OTA, _PAGE_OTA2);
+  page.replace("%%VERSION%%", VERSION);
   return page;
 }
 
@@ -297,6 +346,7 @@ static String buildSettings() {
   page.replace("%%PRINTER_HOST%%", _cfg.printerHost);
   page.replace("%%PRINTER_CODE%%", _cfg.printerCode);
   page.replace("%%PRINTER_SERIAL%%", _cfg.printerSerial);
+  page.replace("%%VERSION%%", VERSION);
   return page;
 }
 
@@ -304,6 +354,7 @@ static String buildWifi() {
   String page = buildPage(_PAGE_WIFI, _PAGE_WIFI2);
   page.replace("%%STA_SSID%%", _cfg.stationSsid);
   page.replace("%%STA_PASS%%", _cfg.stationPass);
+  page.replace("%%VERSION%%", VERSION);
   return page;
 }
 
@@ -319,6 +370,43 @@ static void handleSettings() {
 
 static void handleWifi() {
   _server.send(200, "text/html; charset=utf-8", buildWifi());
+}
+
+static void handleOta() {
+  _server.send(200, "text/html; charset=utf-8", buildOta());
+}
+
+static void handleUpdateUpload() {
+  HTTPUpload &upload = _server.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    Serial.printf("Update: %s (%u bytes)\n", upload.filename.c_str(), upload.contentLength);
+    if (!Update.begin(upload.contentLength)) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.printf("Update success: %u bytes\n", upload.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.end();
+    Serial.println("Update aborted");
+  }
+}
+
+static void handleUpdate() {
+  if (Update.hasError()) {
+    _server.send(200, "text/html", "<html><body><h1>Update Failed</h1><p>Check serial output for details.</p><a href='/config/ota'>Back</a></body></html>");
+  } else {
+    _server.send(200, "text/html", "<html><body><h1>Update Successful</h1><p>Rebooting...</p></body></html>");
+    delay(500);
+    ESP.restart();
+  }
 }
 
 static void handleSave() {
@@ -349,7 +437,9 @@ static void handleSave() {
 
   configSave();
 
-  _server.send_P(200, "text/html; charset=utf-8", _PAGE_SAVED);
+  String page = FPSTR(_PAGE_SAVED);
+  page.replace("%%VERSION%%", VERSION);
+  _server.send(200, "text/html; charset=utf-8", page);
   _server.client().flush();
   _server.client().stop();
   delay(1500);
@@ -380,6 +470,8 @@ inline void webconfigBegin() {
   });
   _server.on("/config/settings", handleSettings);
   _server.on("/config/wifi", handleWifi);
+  _server.on("/config/ota", handleOta);
+  _server.on("/update", HTTP_POST, handleUpdate, handleUpdateUpload);
   _server.on("/save", HTTP_POST, handleSave);
   _server.on("/Logo/bambutagger.png", []() {
     _server.send_P(200, "image/png", (const char *)logo_png, logo_png_len);
