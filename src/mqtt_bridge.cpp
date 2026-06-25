@@ -5,8 +5,62 @@ static char requestTopic[64];
 static char localReportTopic[64];
 static char localRequestTopic[64];
 
+// Self-signed cert + key for local TLS MQTT broker (port 8883).
+// Bambu Studio requires TLS on port 8883 to identify the printer.
+static const char tls_cert[] PROGMEM = R"KEY(
+-----BEGIN CERTIFICATE-----
+MIICujCCAaICCQD/U7VKF6o3MzANBgkqhkiG9w0BAQsFADAeMRwwGgYDVQQDDBNC
+YW1idVRhZ2dlci1HYXRld2F5MCAXDTI2MDYyNTIyMzE0N1oYDzIxMjYwNjAxMjIz
+MTQ3WjAeMRwwGgYDVQQDDBNCYW1idVRhZ2dlci1HYXRld2F5MIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqozJGS5oEDjhmTiDZmzn72612gVvkQUpHcnS
+M3sqlnyqNYG9dx5NtVzqXEay7bnP2dqpPLFqD8nNGN3wGaCH30BuFy0G3668LSMV
+NNJ2gVJcDje9lOcQYU59tNka01m8xSzaKYtJ+F5MaK4IxFw38zqzn/3AAYPayeCG
+l+ySHasZAuL8nFgNGlLR094c7jm3Zfsf8U0HDHpCKzhrK/wcAG6Qu+0JGZf1NZaQ
++aQyllsu3GxsJhmggIF/tMXbn027gfBcJqxP4rL1KPwHgH54mm8oU532uMtevO9E
+XfAKrNF6Wc8kbMAcxFnVCqwQfqt3HBTFCCYU5X0+qOmz3kc7QQIDAQABMA0GCSqG
+SIb3DQEBCwUAA4IBAQA5ilW4DnQX9Vk9hgKWByM4/9e+ZfU8WLVEhGY5NvkGFCSL
+JmViT7U1WwTKxkdaCVKRQv6vI0d1hdosTqYktft/EHkJq9684K4SqfJBazEWH5DF
+lhl1+j08JXYREfumdIlFmlnP1yutE0n7dLX2GNlQi+hNsHQcu0hY+dK5fWOpeYx2
+KdTTLO2TfrHDwp/uqra76QG0RbgQaa5e3LjsZdawEZTI/re7YqUXllB0r/lPs6Je
++K/lzp91g2qlwOyLruj956OHZq8mm4DHO+Lj0JhVMuM2YTo9Ihx2Ynpn/v8odG6Z
+/2WIjJy7fw1PKskkMc24lr1QKvAeNSqB7rAk52kX
+-----END CERTIFICATE-----
+)KEY";
+
+static const char tls_key[] PROGMEM = R"KEY(
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCqjMkZLmgQOOGZ
+OINmbOfvbrXaBW+RBSkdydIzeyqWfKo1gb13Hk21XOpcRrLtuc/Z2qk8sWoPyc0Y
+3fAZoIffQG4XLQbfrrwtIxU00naBUlwON72U5xBhTn202RrTWbzFLNopi0n4Xkxo
+rgjEXDfzOrOf/cABg9rJ4IaX7JIdqxkC4vycWA0aUtHT3hzuObdl+x/xTQcMekIr
+OGsr/BwAbpC77QkZl/U1lpD5pDKWWy7cbGwmGaCAgX+0xdufTbuB8FwmrE/isvUo
+/AeAfniabyhTnfa4y16870Rd8Aqs0XpZzyRswBzEWdUKrBB+q3ccFMUIJhTlfT6o
+6bPeRztBAgMBAAECggEAc96UXZxOrP7IHp3rf/HrnZrcx9O7mY4lAgz0128NXxIx
+XYrYmw4mg1ouCyUpOSNtWDgblJWAVlunEQbvsamDxiRy5yH7Mor3Y78bEDkQtAmt
+aydpkLlvQnzeILkDZaXo/xja2zC7v5bpWJEseaOhi4lNMhxmj2DyiwcUyjC6kJZq
+yBnZ8zkrYWeKozZJbhQlRvNsduQrXToCYOzcoCt8Pu0kL+1G17VBWtICajsdZ8AF
+9zIhIllKmWIgz+dcjkZJDkST0HufOafj4BIA2NJZaauJWOBfeYFbSdqxUPkwsKyr
+1MHA4fLHw43bD9sTZompXyLCCsTVpAefDaVJ5VlfAQKBgQDSq0cmlx3nUfEweVlH
+oby36E3e4ZegZXoaxyz7ura4Lt/sWQ6cC30jHeLH25VRJj92n5q+EweLYBpdCz2N
+qcQXGWgbzu3+11cNAIe4zht1PYtVMff1txM37N5AGnB+j4Ji/5pySlAlAD7GQXd2
+1w/McvHwEz73UJ58dvyijqlgUQKBgQDPP4sJE4UYewzLhb0oe0labnQfuq+ZIxpl
+sBfMq/TUhnQ3Zw1H2Ap5aSAv05YnLlwAaSjFz89C30GGukwWJ+M8axNeIA5l/Q2r
+VtY9ju8JevRsdXYwPAVjC0x6Ulor1qxdHYQDawQovTDubdIkmHOq1xAdr5BG/aMx
+RQS34N3f8QKBgDAV9kyhq6q0MnhdCnrmOPxFYxjfp0tuPjvEgMkIqlJKKMR643HM
+0YhldvElduSp9UxvS9Pc5hjzG7FnMmqWeHLJUtEeH4bOwkjueQw+x1ewb5BHspB8
+dD+MqoI5RrosqZdNPoSd38NCVhHMuab/mdSR3BVvXyz2UuaYBjxYkeKxAoGAKDIz
+3jvJ+biL/8FdscdPr9lybmEAA9yaFxTzWMAVSU8WpVQ4cDHHvkqUcpJAMjM8ptu+
+i7dFhLvWcrIZZcawvRwrcnsXL9LH3u6FuQTK+fS+CXcyyCIsDUy4tZTZZl1Jqvm5
+jAwqj1g6cFQeiPiEnqL9vjQ58HrrNvgi9SMJBZECgYEAwqw7bFgLLg14GVB+YXd1
+IxNX8EU1T3GHxsSPzVeAnlk2aBh3zOJhMq2BS0Uj24w61NIPHHyUDdLzijHchVUT
+38qimAc5tpMFOcos3RtTRrbmN5w/9hsg3GGM0oPRzPzGX3w1BMoNjU9tITXgRed9
+Kl1ubZ1gAgLRCsU8AYNQrZM=
+-----END PRIVATE KEY-----
+)KEY";
+
 MqttBridge::MqttBridge()
-  : _localServer(MQTT_LOCAL_PORT), _lastReconnect(0), _cfg(nullptr) {
+  : _localServer(MQTT_LOCAL_PORT), _tlsServer(MQTT_PRINTER_PORT),
+    _lastReconnect(0), _cfg(nullptr) {
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     _clients[i].active = false;
     _clients[i].client = nullptr;
@@ -38,6 +92,13 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 
   _localServer.begin();
   _localServer.setNoDelay(true);
+
+  // TLS server on 8883 — Bambu Studio requires TLS on this port
+  static BearSSL::X509List cert(tls_cert);
+  static BearSSL::PrivateKey key(tls_key);
+  _tlsServer.setRSACert(&cert, &key);
+  _tlsServer.begin();
+  _tlsServer.setNoDelay(true);
 }
 
 void MqttBridge::loop() {
@@ -166,7 +227,22 @@ void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int l
 // downstream client management
 // ------------------------------------------------------------------
 int MqttBridge::acceptClient() {
-  WiFiClient *c = new WiFiClient(_localServer.accept());
+  WiFiClient *c = nullptr;
+
+  // Check plain TCP server (port 1883)
+  WiFiClient plain = _localServer.accept();
+  if (plain) {
+    c = new WiFiClient(plain);
+  } else {
+    // Check TLS server (port 8883) for Bambu Studio clients
+    WiFiClientSecure *tls = new WiFiClientSecure(_tlsServer.accept());
+    if (tls && tls->connected()) {
+      c = tls;
+    } else {
+      delete tls;
+    }
+  }
+
   if (!c || !c->connected()) {
     delete c;
     return -1;

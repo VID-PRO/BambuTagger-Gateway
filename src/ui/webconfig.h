@@ -477,7 +477,7 @@ static bool isValidHost(const String &host) {
 
   if (ipv4Like && dots == 3) {
     // Validate every octet is 0-255
-    int octet = 0, seen = 0, val = 0;
+    int seen = 0, val = 0;
     for (unsigned int i = 0; i <= host.length(); i++) {
       char c = (i < host.length()) ? host[i] : '.';
       if (c >= '0' && c <= '9') {
