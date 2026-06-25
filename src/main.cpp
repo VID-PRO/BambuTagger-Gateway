@@ -3,7 +3,7 @@
 #include <ArduinoOTA.h>
 
 #include "config.h"
-#include "webconfig.h"
+#include "ui/webconfig.h"
 #include "mqtt_bridge.h"
 #include "tcp_proxy.h"
 
