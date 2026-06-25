@@ -41,7 +41,7 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 }
 
 void MqttBridge::loop() {
-  if (!_pubsub.connected()) {
+  if (!_upTcp || !_pubsub.connected()) {
     // Don't attempt upstream MQTT until printer is configured and station WiFi is up
     if (!WiFi.isConnected()) return;
     if (_cfg && strlen(_cfg->printerHost) == 0) return;
@@ -79,11 +79,11 @@ void MqttBridge::loop() {
 }
 
 bool MqttBridge::isConnected() {
-  return _pubsub.connected();
+  return _upTcp && _pubsub.connected();
 }
 
 MqttStatus MqttBridge::getStatus() {
-  if (_pubsub.connected()) return MQTT_UP;
+  if (_upTcp && _pubsub.connected()) return MQTT_UP;
   // Printer is on LAN — unreachable when station WiFi is down
   if (!WiFi.isConnected()) return MQTT_IDLE;
   if (_cfg && strlen(_cfg->printerHost) > 0) {
@@ -111,7 +111,7 @@ bool MqttBridge::connectUpstream() {
   snprintf(willTopic, sizeof(willTopic), "device/%s/status", _cfg->printerSerial);
 
   char clientId[32];
-  snprintf(clientId, sizeof(clientId), "gateway-%06x", ESP.getChipId());
+  snprintf(clientId, sizeof(clientId), "%s", _cfg->printerSerial);
 
   bool ok = _pubsub.connect(clientId, "bblp", _cfg->printerCode,
                             willTopic, 1, true, "offline");

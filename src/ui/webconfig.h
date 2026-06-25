@@ -88,7 +88,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 <div class="card" style="max-width:560px">
   <h2>Gateway Identity</h2>
   <div style="margin:12px 0">
-    <div class="info-row"><span class="lbl">Station IP</span><span class="val">%%STA_IP%%</span></div>
+    <div class="info-row"><span class="lbl">IP</span><span class="val">%%STA_IP%%</span></div>
     <div class="info-row"><span class="lbl">Serial</span><span class="val">%%GATEWAY_SERIAL%%</span></div>
     <div class="info-row"><span class="lbl">Model</span><span class="val">%%PRINTER_MODEL%%</span></div>
   </div>
