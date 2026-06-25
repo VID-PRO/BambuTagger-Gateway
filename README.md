@@ -1,4 +1,4 @@
-# <img alt="logo" src="Logo/bambutagger.png" height="36" /> BambuTagger-Gateway
+# BambuTagger-Gateway
 
 Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by multiplexing MQTT, camera, and FTPS traffic through a single ESP8266 gateway.
 
@@ -13,11 +13,15 @@ Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by 
 | **MQTT multiplexer** | One upstream MQTT connection to the printer; up to 8 local clients can subscribe/publish simultaneously via the gateway |
 | **Camera broadcast** | Single upstream connection to printer camera stream; broadcasts to all connected local clients |
 | **FTPS forwarder** | Single upstream FTPS connection; forwards control/data to local clients |
-| **WiFi AP mode** | Creates `Bambu-Gateway` access point — clients connect directly to the gateway, no LAN reconfiguration needed |
+| **WiFi AP mode** | Creates `BambuTagger-Gateway` access point — clients connect directly to the gateway, no LAN reconfiguration needed |
 | **Station mode** | Optionally joins your existing WiFi network alongside the AP |
 | **mDNS** | Advertises as `BambuTagger-Gateway.local` |
 | **Auto-resubscribe** | Tracks all client subscriptions; re-subscribes upstream on reconnect |
 | **Topic-aware routing** | Correctly handles `#`, `+` wildcards when forwarding printer reports to local clients |
+| **Web UI** | Dashboard, Printer settings, WiFi settings, firmware update — served from the gateway |
+| **Auto-update** | One-click firmware update from latest GitHub release |
+| **Fake printer mode** | Responds to Bambu Studio MQTT queries (model, serial, idle status) when no real printer is connected |
+| **Status LED** | Built-in LED indicates WiFi/MQTT connection state at a glance |
 
 ---
 
@@ -65,6 +69,16 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 | RAM | 80 KB (usable) + 4 MB flash |
 | WiFi | 802.11 b/g/n, AP + Station simultaneous |
 | GPIO | Enough for status LED, reset button (optional) |
+| Status LED | Built-in (GPIO2/D4, active low) — see table below |
+
+### LED Status Reference
+
+| Pattern | Meaning |
+|---------|---------|
+| Solid on (boot) | Starting up |
+| Slow blink (500ms) | WiFi SSID configured but not connected |
+| Fast blink (100ms) | WiFi up, MQTT connecting to printer |
+| Off | Everything connected and working |
 
 ---
 
@@ -75,8 +89,11 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 | Library | Version | Purpose |
 |---|---|---|
 | `PubSubClient` | ^2.8 | Upstream MQTT connection to printer |
+| `ArduinoJson` | ^7.4 | JSON parsing |
 | `ESP8266WiFi` | Built-in | WiFi AP + Station |
 | `ESP8266mDNS` | Built-in | mDNS responder |
+| `ESP8266HTTPClient` | Built-in | GitHub release download for auto-update |
+| `ArduinoOTA` | Built-in | Over-the-air firmware updates |
 
 ### Building
 
@@ -107,18 +124,30 @@ pio device monitor -b 115200
 
 ## Configuration
 
-Edit `src/config.h` before building:
+Configuration is stored in EEPROM and managed through the **web UI** (http://192.168.4.1).  
+Compile-time defaults live in `src/config.h` — they take effect after a magic-number change or EEPROM reset.
+
+### Web UI Pages
+
+| Page | Path | Description |
+|---|---|---|
+| Dashboard | `/` | Connection status, printer info |
+| Printer | `/config/settings` | Printer host, access code, serial number, model |
+| WiFi | `/config/wifi` | Station SSID/password (leave blank for AP-only) |
+| Update | `/config/ota` | One-click firmware update from GitHub releases |
+
+### Compile-time Defaults (`src/config.h`)
 
 | Setting | Default | Description |
 |---|---|---|
-| `PRINTER_HOST` | `bambu-printer.local` | Printer hostname or IP |
-| `PRINTER_ACCESS_CODE` | `12345678` | Printer access code (from LCD/OR code) |
-| `PRINTER_SERIAL` | `SERIAL001` | Printer serial number (from LCD) |
-| `GATEWAY_AP_SSID` | `Bambu-Gateway` | Gateway WiFi name |
-| `GATEWAY_AP_PASS` | `bambugateway` | Gateway WiFi password |
-| `STATION_SSID` | `""` | Your LAN WiFi SSID (leave empty to skip) |
-| `STATION_PASS` | `""` | Your LAN WiFi password |
+| `PRINTER_HOST_DFLT` | `bambu-printer.local` | Printer hostname or IP |
+| `PRINTER_CODE_DFLT` | `12345678` | Printer access code |
+| `PRINTER_SERIAL_DFLT` | `22E8BJ5B0000000` | Real printer serial (upstream MQTT) |
+| `PRINTER_MODEL_DFLT` | `P1S` | Printer model (used for Bambu Studio handshake) |
+| `GATEWAY_AP_SSID` | `BambuTagger-Gateway` | Gateway WiFi name |
+| `GATEWAY_AP_PASS` | `""` (open) | Gateway WiFi password |
 | `MAX_MQTT_CLIENTS` | `8` | Max simultaneous local MQTT clients |
+| `MQTT_BUFFER_SIZE` | `2048` | MQTT packet buffer (bytes) |
 
 ---
 
@@ -160,9 +189,12 @@ BambuTagger-Gateway/
 ├── platformio.ini              # Build configuration
 └── src/
     ├── config.h                # Printer credentials, WiFi, port limits
-    ├── main.cpp                # Entry point, WiFi setup, bridge init
-    ├── mqtt_bridge.h/.cpp      # MQTT multiplexer (upstream + downstream)
-    └── tcp_proxy.h/.cpp        # Generic TCP forwarder (camera, FTPS)
+    ├── main.cpp                # Entry point, WiFi setup, LED, bridge init
+    ├── mqtt_bridge.h/.cpp      # MQTT multiplexer (upstream + downstream + fake printer)
+    ├── tcp_proxy.h/.cpp        # Generic TCP forwarder (camera, FTPS)
+    └── ui/
+        ├── webconfig.h         # Web UI (dashboard, settings, update) + EEPROM helpers
+        └── logo_png.h          # 28×28 PNG favicon / nav logo
 ```
 
 ---
@@ -171,7 +203,7 @@ BambuTagger-Gateway/
 
 The MQTT bridge is the core component. It:
 
-1. **Connects upstream** to the printer's MQTT broker (port 8883) as a single client using `PubSubClient`
+1. **Connects upstream** to the printer's MQTT broker (port 8883) over **TLS** (`WiFiClientSecure` with `setInsecure()`) as a single client using `PubSubClient`
 2. **Listens locally** on port 1883 for plain TCP MQTT connections
 3. **Parses incoming MQTT packets** (CONNECT, SUBSCRIBE, UNSUBSCRIBE, PUBLISH, PINGREQ, DISCONNECT) and responds appropriately
 4. **Tracks subscriptions** per local client, including wildcard topics (`#`, `+`)
@@ -202,6 +234,8 @@ The MQTT bridge is the core component. It:
 | Camera stream not working | Some printers use different camera ports; check your printer model's port and update `CAM_PRINTER_PORT` |
 | FTPS not working | FTPS requires TLS which the ESP8266 TCP proxy does not terminate — use raw FTP or MQTT for file ops |
 | Frequent disconnects | Reduce `MAX_MQTT_CLIENTS` if ESP8266 runs out of memory (check free heap in serial output) |
+| LED stays on / no blink | Gateway is booting; if stuck, check serial output for errors |
+| Bambu Studio can't connect | Ensure the printer model and serial number are set correctly in the Printer web page; the gateway fakes a printer identity when no real printer is reachable |
 
 ---
 

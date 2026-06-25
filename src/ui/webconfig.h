@@ -4,13 +4,15 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <Updater.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include "config.h"
 #include "mqtt_bridge.h"
 #include "logo_png.h"
 
 
-#define EEPROM_SIZE 256
-#define EEPROM_MAGIC 0x42
+#define EEPROM_SIZE 512
+#define EEPROM_MAGIC 0x44
 
 extern MqttBridge mqtt;
 
@@ -31,13 +33,10 @@ nav a:hover{color:#c9d1d9}
 nav a.active{color:#58a6ff;border-bottom-color:#58a6ff}
 .wrapper{display:flex;align-items:center;justify-content:center;padding:16px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:28px;width:100%;max-width:480px}
-.subnav{display:flex;gap:0;margin-bottom:18px;border-bottom:1px solid #30363d}
-.subnav a{padding:8px 18px;color:#8b949e;text-decoration:none;font-size:13px;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .2s}
-.subnav a:hover{color:#c9d1d9}
-.subnav a.active{color:#58a6ff;border-bottom-color:#58a6ff}
 h2{color:#58a6ff;font-size:.9em;letter-spacing:.05em;text-transform:uppercase;margin:0 0 16px;padding-bottom:4px;border-bottom:1px solid #30363d}
 label{display:block;color:#8b949e;font-size:.8em;margin-bottom:3px}
 input{display:block;width:100%;padding:10px 12px;margin-bottom:10px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;font-size:.95em;outline:none;transition:border .2s}
+select{display:block;width:100%;padding:10px 12px;margin-bottom:10px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;font-size:.95em;outline:none;transition:border .2s;cursor:pointer}
 input:focus{border-color:#58a6ff}
 button{display:block;width:100%;padding:13px;margin-top:6px;background:#238636;color:#fff;border:none;border-radius:6px;font-size:1.05em;font-weight:bold;cursor:pointer;transition:background .2s}
 button:hover{background:#2ea043}
@@ -67,15 +66,15 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 <header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
 <nav>
 <a href="/" class="active">Dashboard</a>
-<a href="/config/settings">Settings</a>
-<a href="/config/ota">OTA Update</a>
+<a href="/config/settings">Printer</a>
+<a href="/config/wifi">WiFi</a>
+<a href="/config/ota">Update</a>
 </nav>
 <div class="wrapper">
 <div class="card" style="max-width:560px">
   <h2>Gateway Status</h2>
   <div style="margin:12px 0">
     <div class="info-row"><span class="lbl">AP SSID</span><span class="val">%%AP_SSID%%</span></div>
-    <div class="info-row"><span class="lbl">AP IP</span><span class="val">%%AP_IP%%</span></div>
     <div class="info-row"><span class="lbl">Station</span><span class="val">%%STA_STATUS%%</span></div>
     <div class="info-row"><span class="lbl">Printer</span><span class="val">%%PRINTER_HOST%%</span></div>
     <div class="info-row"><span class="lbl">MQTT Link</span><span class="val">%%MQTT_STATUS%%</span></div>
@@ -83,6 +82,15 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
     <div class="info-row"><span class="lbl">Free Heap</span><span class="val">%%HEAP%%</span></div>
     <div class="info-row"><span class="lbl">Version</span><span class="val">%%VERSION%%</span></div>
   </div>
+  </div>
+</div>
+<div class="wrapper">
+<div class="card" style="max-width:560px">
+  <h2>Gateway Identity</h2>
+  <div style="margin:12px 0">
+    <div class="info-row"><span class="lbl">Station IP</span><span class="val">%%STA_IP%%</span></div>
+    <div class="info-row"><span class="lbl">Serial</span><span class="val">%%GATEWAY_SERIAL%%</span></div>
+    <div class="info-row"><span class="lbl">Model</span><span class="val">%%PRINTER_MODEL%%</span></div>
   </div>
 </div>
 </div>
@@ -118,12 +126,12 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
 <header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
 <nav>
 <a href="/">Dashboard</a>
-<a href="/config/settings" class="active">Settings</a>
-<a href="/config/ota">OTA Update</a>
+<a href="/config/settings" class="active">Printer</a>
+<a href="/config/wifi">WiFi</a>
+<a href="/config/ota">Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
-  <div class="subnav"><a href="/config/settings" class="active">Printer</a><a href="/config/wifi">WiFi</a></div>
   <h2>Printer Settings</h2>
   <form method="post" action="/save">
     <label>Hostname / IP</label>
@@ -134,9 +142,13 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
     <input name="printer_code" type="password" placeholder="8-digit access code" value="%%PRINTER_CODE%%">
     <p class="hint">Printer: Settings &#8594; Network &#8594; Access Code</p>
 
-    <label>Serial Number</label>
-    <input name="printer_serial" placeholder="e.g. 01S00C123456789" value="%%PRINTER_SERIAL%%">
-    <p class="hint">Printer: Settings &#8594; About</p>
+    <label>Printer Serial Number</label>
+    <input name="printer_serial" placeholder="e.g. 22E8BJ5B0900685" value="%%PRINTER_SERIAL%%">
+    <p class="hint">Serial of the real Bambu printer (used for upstream MQTT)</p>
+
+    <label>Printer Model</label>
+    <select name="printer_model">%%PRINTER_MODEL_OPTIONS%%</select>
+    <p class="hint">Used when Bambu Studio asks for printer identity</p>
 
     <button type="submit">Save &amp; Reboot</button>
   </form>
@@ -165,12 +177,12 @@ static const char _PAGE_WIFI2[] PROGMEM = R"html(
 <header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
 <nav>
 <a href="/">Dashboard</a>
-<a href="/config/settings" class="active">Settings</a>
-<a href="/config/ota">OTA Update</a>
+<a href="/config/settings">Printer</a>
+<a href="/config/wifi" class="active">WiFi</a>
+<a href="/config/ota">Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
-  <div class="subnav"><a href="/config/settings">Printer</a><a href="/config/wifi" class="active">WiFi</a></div>
   <h2>WiFi Settings</h2>
   <form method="post" action="/save">
     <label>SSID</label>
@@ -189,14 +201,14 @@ static const char _PAGE_WIFI2[] PROGMEM = R"html(
 </html>
 )html";
 
-// ── OTA Update page ────────────────────────────────────────────────────
+// ── Update page ────────────────────────────────────────────────────
 static const char _PAGE_OTA[] PROGMEM = R"html(
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BambuTagger-Gateway — OTA Update</title>
+<title>BambuTagger-Gateway — Update</title>
 <style>
 )html";
 
@@ -207,18 +219,16 @@ static const char _PAGE_OTA2[] PROGMEM = R"html(
 <header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
 <nav>
 <a href="/">Dashboard</a>
-<a href="/config/settings">Settings</a>
-<a href="/config/ota" class="active">OTA Update</a>
+<a href="/config/settings">Printer</a>
+<a href="/config/wifi">WiFi</a>
+<a href="/config/ota" class="active">Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
   <h2>Firmware Update</h2>
-  <p style="color:#8b949e;font-size:13px;margin-bottom:16px">Upload a <code>.bin</code> firmware file to update the gateway. The device will reboot after a successful update.</p>
-  <form method="post" action="/update" enctype="multipart/form-data">
-    <label>Firmware binary</label>
-    <input type="file" name="firmware" accept=".bin" required>
-    <button type="submit">Upload &amp; Update</button>
-  </form>
+  <p style="color:#8b949e;font-size:13px;margin-bottom:16px">Download and install the latest firmware from GitHub.</p>
+  <button onclick="location='/update/github'">Update from GitHub</button>
+  <p style="color:#484f58;font-size:12px;margin-top:12px">Current version: %%VERSION%%</p>
 </div>
 </div>
 <footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
@@ -233,7 +243,7 @@ static const char _PAGE_SAVED[] PROGMEM = R"html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="15;url=/">
+<meta http-equiv="refresh" content="3;url=/">
 <title>BambuTagger-Gateway</title>
 <link rel="icon" href="/Logo/bambutagger.png" type="image/png">
 <style>
@@ -275,6 +285,10 @@ static void configLoad() {
     strlcpy(_cfg.printerHost, PRINTER_HOST_DFLT, sizeof(_cfg.printerHost));
     strlcpy(_cfg.printerCode, PRINTER_CODE_DFLT, sizeof(_cfg.printerCode));
     strlcpy(_cfg.printerSerial, PRINTER_SERIAL_DFLT, sizeof(_cfg.printerSerial));
+    char gwSerial[32];
+    snprintf(gwSerial, sizeof(gwSerial), "22E8BJ5B%07X", ESP.getChipId() & 0xFFFFFF);
+    strlcpy(_cfg.gatewaySerial, gwSerial, sizeof(_cfg.gatewaySerial));
+    strlcpy(_cfg.printerModel, PRINTER_MODEL_DFLT, sizeof(_cfg.printerModel));
     _cfg.stationSsid[0] = '\0';
     _cfg.stationPass[0] = '\0';
   }
@@ -300,21 +314,20 @@ static String buildPage(const char *tmpl1, const char *tmpl2) {
 static String buildRoot() {
   String page = buildPage(_PAGE_ROOT, _PAGE_ROOT2);
   page.replace("%%AP_SSID%%", GATEWAY_AP_SSID);
-  if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
-    page.replace("%%AP_IP%%", WiFi.softAPIP().toString());
-  } else {
-    page.replace("%%AP_IP%%", "<span class=\"down\">inactive</span>");
-  }
 
   if (strlen(_cfg.stationSsid) > 0) {
     bool staUp = WiFi.isConnected();
     page.replace("%%STA_STATUS%%", String("<span class=\"") + (staUp ? "up" : "down") + "\">"
       + _cfg.stationSsid + " " + (staUp ? "&#10003;" : "&#10007;") + "</span>");
+    page.replace("%%STA_IP%%", staUp ? WiFi.localIP().toString() : "<span class=\"down\">inactive</span>");
   } else {
     page.replace("%%STA_STATUS%%", "<span class=\"down\">disabled</span>");
+    page.replace("%%STA_IP%%", "<span class=\"down\">disabled</span>");
   }
 
   page.replace("%%PRINTER_HOST%%", _cfg.printerHost);
+  page.replace("%%GATEWAY_SERIAL%%", _cfg.gatewaySerial);
+  page.replace("%%PRINTER_MODEL%%", _cfg.printerModel);
   {
     const char *mqttCls, *mqttLabel;
     switch (mqtt.getStatus()) {
@@ -347,6 +360,18 @@ static String buildSettings() {
   page.replace("%%PRINTER_HOST%%", _cfg.printerHost);
   page.replace("%%PRINTER_CODE%%", _cfg.printerCode);
   page.replace("%%PRINTER_SERIAL%%", _cfg.printerSerial);
+
+  String opts;
+  const char *models[] = {"P1S", "P1P", "X1C", "X1E", "A1", "A1 Mini"};
+  for (auto m : models) {
+    opts += "<option";
+    if (strcmp(_cfg.printerModel, m) == 0) opts += " selected";
+    opts += ">";
+    opts += m;
+    opts += "</option>";
+  }
+  page.replace("%%PRINTER_MODEL_OPTIONS%%", opts);
+
   page.replace("%%VERSION%%", VERSION);
   return page;
 }
@@ -377,37 +402,65 @@ static void handleOta() {
   _server.send(200, "text/html; charset=utf-8", buildOta());
 }
 
-static void handleUpdateUpload() {
-  HTTPUpload &upload = _server.upload();
-  if (upload.status == UPLOAD_FILE_START) {
-    Serial.printf("Update: %s (%u bytes)\n", upload.filename.c_str(), upload.contentLength);
-    if (!Update.begin(upload.contentLength)) {
-      Update.printError(Serial);
-    }
-  } else if (upload.status == UPLOAD_FILE_WRITE) {
-    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-      Update.printError(Serial);
-    }
-  } else if (upload.status == UPLOAD_FILE_END) {
-    if (Update.end(true)) {
-      Serial.printf("Update success: %u bytes\n", upload.totalSize);
-    } else {
-      Update.printError(Serial);
-    }
-  } else if (upload.status == UPLOAD_FILE_ABORTED) {
-    Update.end();
-    Serial.println("Update aborted");
-  }
-}
+static void handleUpdateFromGithub() {
+  String html = F("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>Updating&hellip;</title><style>");
+  html += FPSTR(_SITE_STYLE);
+  html += F("</style></head><body>");
+  html += F("<header><div class=\"logo\"><img src=\"/Logo/bambutagger.png\" alt=\"B\"><h1>BambuTagger-Gateway</h1></div></header>");
+  html += F("<div class=\"wrapper\"><div class=\"card\" style=\"text-align:center\">");
+  html += F("<h1 style=\"color:#58a6ff\">Updating&hellip;</h1>");
+  html += F("<p style=\"color:#8b949e;margin-top:8px\">Downloading from GitHub and flashing</p>");
+  html += F("</div></div></body></html>");
+  _server.send(200, "text/html; charset=utf-8", html);
+  _server.client().flush();
+  _server.client().stop();
 
-static void handleUpdate() {
-  if (Update.hasError()) {
-    _server.send(200, "text/html", "<html><body><h1>Update Failed</h1><p>Check serial output for details.</p><a href='/config/ota'>Back</a></body></html>");
-  } else {
-    _server.send(200, "text/html", "<html><body><h1>Update Successful</h1><p>Rebooting...</p></body></html>");
-    delay(500);
-    ESP.restart();
+  delay(100);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(10000);
+
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setTimeout(30000);
+  http.setUserAgent(F("BambuTagger-Gateway"));
+
+  String url = F("https://github.com/VID-PRO/BambuTagger-Gateway/releases/latest/download/BambuTagger-Gateway.ino.bin");
+
+  http.begin(client, url);
+  int code = http.GET();
+
+  if (code == 200) {
+    int len = http.getSize();
+    if (len > 0) {
+      WiFiClient *stream = http.getStreamPtr();
+      if (Update.begin(len)) {
+        size_t written = 0;
+        uint8_t buf[256];
+        while (written < (size_t)len) {
+          int avail = stream->available();
+          if (avail > 0) {
+            int rd = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
+            Update.write(buf, rd);
+            written += rd;
+          } else {
+            delay(1);
+          }
+        }
+        if (Update.end(true)) {
+          Serial.println("GitHub update successful, rebooting");
+          http.end();
+          delay(500);
+          ESP.restart();
+        }
+      }
+    }
   }
+  http.end();
+  Serial.println("GitHub update failed");
 }
 
 static void handleSave() {
@@ -424,6 +477,10 @@ static void handleSave() {
   }
   if (serial.length() > 0) {
     strlcpy(_cfg.printerSerial, serial.c_str(), sizeof(_cfg.printerSerial));
+  }
+  String model = _server.arg("printer_model");
+  if (model.length() > 0) {
+    strlcpy(_cfg.printerModel, model.c_str(), sizeof(_cfg.printerModel));
   }
 
   // WiFi settings (can come from same form or separate)
@@ -480,7 +537,7 @@ inline void webconfigBegin() {
   _server.on("/config/settings", handleSettings);
   _server.on("/config/wifi", handleWifi);
   _server.on("/config/ota", handleOta);
-  _server.on("/update", HTTP_POST, handleUpdate, handleUpdateUpload);
+  _server.on("/update/github", handleUpdateFromGithub);
   _server.on("/save", HTTP_POST, handleSave);
   _server.onNotFound(handleNotFound);
 

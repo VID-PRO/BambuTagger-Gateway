@@ -13,13 +13,16 @@ struct GatewayConfig {
   char printerHost[64];
   char printerCode[32];
   char printerSerial[32];
+  char gatewaySerial[32];
+  char printerModel[24];
 };
 #pragma pack(pop)
 
 // ── Compile-time defaults ────────────────────────────────────────────
 #define PRINTER_HOST_DFLT     "bambu-printer.local"
 #define PRINTER_CODE_DFLT     "12345678"
-#define PRINTER_SERIAL_DFLT   "SERIAL001"
+#define PRINTER_SERIAL_DFLT   "22E8BJ5B0000000"
+#define PRINTER_MODEL_DFLT    "P1S"
 
 // Gateway WiFi AP (clients connect here)
 #define GATEWAY_AP_SSID       "BambuTagger-Gateway"

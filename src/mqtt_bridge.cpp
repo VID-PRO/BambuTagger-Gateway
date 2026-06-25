@@ -2,6 +2,8 @@
 
 static char reportTopic[64];
 static char requestTopic[64];
+static char localReportTopic[64];
+static char localRequestTopic[64];
 
 MqttBridge::MqttBridge()
   : _localServer(MQTT_LOCAL_PORT), _lastReconnect(0), _cfg(nullptr) {
@@ -15,6 +17,8 @@ MqttBridge::MqttBridge()
 
   snprintf(reportTopic, sizeof(reportTopic), MQTT_REPORT_TOPIC, PRINTER_SERIAL_DFLT);
   snprintf(requestTopic, sizeof(requestTopic), MQTT_REQUEST_TOPIC, PRINTER_SERIAL_DFLT);
+  snprintf(localReportTopic, sizeof(localReportTopic), MQTT_REPORT_TOPIC, PRINTER_SERIAL_DFLT);
+  snprintf(localRequestTopic, sizeof(localRequestTopic), MQTT_REQUEST_TOPIC, PRINTER_SERIAL_DFLT);
 
   _pubsub.setClient(_upTcp);
   _pubsub.setBufferSize(MQTT_BUFFER_SIZE);
@@ -29,6 +33,8 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   // update topic buffers from runtime config
   snprintf(reportTopic, sizeof(reportTopic), MQTT_REPORT_TOPIC, _cfg->printerSerial);
   snprintf(requestTopic, sizeof(requestTopic), MQTT_REQUEST_TOPIC, _cfg->printerSerial);
+  snprintf(localReportTopic, sizeof(localReportTopic), MQTT_REPORT_TOPIC, _cfg->gatewaySerial);
+  snprintf(localRequestTopic, sizeof(localRequestTopic), MQTT_REQUEST_TOPIC, _cfg->gatewaySerial);
 
   _localServer.begin();
   _localServer.setNoDelay(true);
@@ -36,6 +42,11 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 
 void MqttBridge::loop() {
   if (!_pubsub.connected()) {
+    // Don't attempt upstream MQTT until printer is configured and station WiFi is up
+    if (!WiFi.isConnected()) return;
+    if (_cfg && (strlen(_cfg->printerHost) == 0
+        || strcmp(_cfg->printerHost, PRINTER_HOST_DFLT) == 0)) return;
+
     unsigned long now = millis();
     if (now - _lastReconnect > 5000) {
       _lastReconnect = now;
@@ -74,6 +85,8 @@ bool MqttBridge::isConnected() {
 
 MqttStatus MqttBridge::getStatus() {
   if (_pubsub.connected()) return MQTT_UP;
+  // Printer is on LAN — unreachable when station WiFi is down
+  if (!WiFi.isConnected()) return MQTT_IDLE;
   if (_cfg && strlen(_cfg->printerHost) > 0
       && strcmp(_cfg->printerHost, PRINTER_HOST_DFLT) != 0) {
     return MQTT_TRYING;
@@ -86,7 +99,9 @@ MqttStatus MqttBridge::getStatus() {
 // ------------------------------------------------------------------
 bool MqttBridge::connectUpstream() {
   if (!_cfg) return false;
-  _upTcp.setTimeout(1000);
+  _upTcp.stop();
+  _upTcp.setInsecure();
+  _upTcp.setTimeout(10000);
   if (!_upTcp.connect(_cfg->printerHost, MQTT_PRINTER_PORT)) return false;
 
   char willTopic[64];
@@ -125,7 +140,14 @@ static bool topicMatchesSub(const String &topic, const String &sub) {
 }
 
 void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int len) {
-  String t(topic);
+  // Translate upstream topic (printer serial) to local topic (gateway serial)
+  String t = topic;
+  if (_cfg && strcmp(_cfg->printerSerial, _cfg->gatewaySerial) != 0) {
+    String prefix = String("device/") + _cfg->printerSerial;
+    if (t.startsWith(prefix)) {
+      t = String("device/") + _cfg->gatewaySerial + t.substring(prefix.length());
+    }
+  }
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) continue;
     for (uint8_t s = 0; s < _clients[i].subCount; s++) {
@@ -205,7 +227,15 @@ void MqttBridge::handleClient(int idx) {
       uint8_t tlenBuf[2];
       if (!readBytes(c, tlenBuf, 2)) return;
       uint16_t tlen = (tlenBuf[0] << 8) | tlenBuf[1];
-      for (uint16_t i = 0; i < tlen; i++) {
+      char topic[128];
+      uint16_t rlen = (tlen < sizeof(topic) - 1) ? tlen : sizeof(topic) - 1;
+      for (uint16_t i = 0; i < rlen; i++) {
+        uint8_t ch;
+        if (!readByte(c, ch)) return;
+        topic[i] = (char)ch;
+      }
+      topic[rlen] = 0;
+      for (uint16_t i = rlen; i < tlen; i++) {
         uint8_t ch;
         if (!readByte(c, ch)) return;
       }
@@ -222,6 +252,49 @@ void MqttBridge::handleClient(int idx) {
       uint8_t payload[MQTT_BUFFER_SIZE];
       uint32_t toRead = (payloadLen > MQTT_BUFFER_SIZE) ? MQTT_BUFFER_SIZE : payloadLen;
       if (toRead > 0 && !readBytes(c, payload, toRead)) return;
+
+      // Fake printer responses when no real printer is connected
+      if (!_pubsub.connected() && strcmp(topic, localRequestTopic) == 0) {
+        if (strstr((const char *)payload, "\"get_version\"")) {
+          char seq[16] = "0";
+          const char *s = strstr((const char *)payload, "\"sequence_id\"");
+          if (s) {
+            s = strchr(s, ':');
+            if (s) {
+              s++;
+              while (*s == ' ' || *s == '\"') s++;
+              const char *e = s;
+              while (*e && *e != '\"' && *e != ' ' && *e != ',' && *e != '}') e++;
+              size_t slen = e - s;
+              if (slen > 0 && slen < sizeof(seq)) {
+                memcpy(seq, s, slen);
+                seq[slen] = 0;
+              }
+            }
+          }
+
+          char resp[384];
+          int rlen2 = snprintf(resp, sizeof(resp),
+            "{\"info\":{\"command\":\"get_version\",\"sequence_id\":\"%s\","
+            "\"version\":\"" VERSION "\",\"model\":\"%s\",\"online\":\"true\"}}",
+            seq, _cfg ? _cfg->printerModel : PRINTER_MODEL_DFLT);
+          sendPublish(c, localReportTopic, (uint8_t *)resp, rlen2, 0);
+        }
+
+        if (strstr((const char *)payload, "\"pushall\"")) {
+          char resp[512];
+          int rlen2 = snprintf(resp, sizeof(resp),
+            "{\"print\":{\"command\":\"pushall\",\"sequence_id\":\"0\","
+            "\"gcode_state\":\"IDLE\",\"subtask_name\":\"\",\"project_id\":\"\","
+            "\"gcode_file\":\"\",\"mc_percent\":0,\"mc_remaining_time\":0,"
+            "\"layer_num\":0,\"total_layer_num\":0,"
+            "\"nozzle_temper\":25.1,\"nozzle_target_temper\":0,"
+            "\"bed_temper\":25.2,\"bed_target_temper\":0,"
+            "\"chamber_temper\":25.0,\"spd_mag\":100,"
+            "\"wifi_signal\":\"-50dBm\",\"sdcard\":true}}");
+          sendPublish(c, localReportTopic, (uint8_t *)resp, rlen2, 0);
+        }
+      }
 
       _pubsub.publish(requestTopic, payload, toRead, false);
 

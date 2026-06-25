@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include "config.h"
 
@@ -30,7 +31,7 @@ public:
   MqttStatus getStatus();
 
 private:
-  WiFiClient _upTcp;
+  WiFiClientSecure _upTcp;
   PubSubClient _pubsub;
   WiFiServer _localServer;
   MqttClientCtx _clients[MAX_MQTT_CLIENTS];

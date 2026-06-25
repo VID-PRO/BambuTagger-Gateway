@@ -41,10 +41,41 @@ static void manageAP() {
   }
 }
 
+static void ledSetup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);  // on during boot
+}
+
+static void ledLoop() {
+  static unsigned long last = 0;
+  unsigned long now = millis();
+  unsigned long interval;
+
+  bool staConfig = strlen(webconfigGetConfig()->stationSsid) > 0;
+  bool staUp = WiFi.isConnected();
+  MqttStatus st = ::mqtt.getStatus();
+
+  if (!staUp && staConfig) {
+    interval = 500;     // slow blink — WiFi connecting
+  } else if (staUp && st != MQTT_UP) {
+    interval = 100;     // fast blink — MQTT connecting
+  } else {
+    digitalWrite(LED_BUILTIN, HIGH);  // off — everything up
+    return;
+  }
+
+  if (now - last >= interval) {
+    last = now;
+    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("\n\nBambuTagger Gateway " VERSION);
+
+  ledSetup();
 
   // load runtime config from EEPROM
   webconfigBegin();
@@ -101,4 +132,5 @@ void loop() {
   ftpsProxy.loop();
   ArduinoOTA.handle();
   MDNS.update();
+  ledLoop();
 }
