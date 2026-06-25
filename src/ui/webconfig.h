@@ -462,6 +462,7 @@ static void handleNotFound() {
 // ── Logo handler ───────────────────────────────────────────────────────
 
 static void handleLogo() {
+  _server.sendHeader("Cache-Control", "max-age=86400");
   _server.send_P(200, "image/png", (const char*)logo_png, sizeof(logo_png));
 }
 
