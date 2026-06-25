@@ -256,47 +256,66 @@ void MqttBridge::handleClient(int idx) {
       uint32_t toRead = (payloadLen > MQTT_BUFFER_SIZE) ? MQTT_BUFFER_SIZE : payloadLen;
       if (toRead > 0 && !readBytes(c, payload, toRead)) return;
 
-      // Fake printer responses when no real printer is connected
-      if (!_pubsub.connected() && strcmp(topic, localRequestTopic) == 0) {
-        if (strstr((const char *)payload, "\"get_version\"")) {
-          char seq[16] = "0";
-          const char *s = strstr((const char *)payload, "\"sequence_id\"");
-          if (s) {
-            s = strchr(s, ':');
+      // Fake printer responses when no real printer is connected.
+      // Respond to any device/X/request topic so Bambu Studio
+      // auto-detects the printer regardless of which serial is used.
+      if (!_pubsub.connected()) {
+        int tlen = strlen(topic);
+        static const char reqSuffix[] = "/request";
+        static const int slen = sizeof(reqSuffix) - 1;
+        if (tlen > slen && strcmp(topic + tlen - slen, reqSuffix) == 0) {
+          // Derive report topic from the request
+          char respTopic[128];
+          memcpy(respTopic, topic, tlen - slen);
+          memcpy(respTopic + tlen - slen, "/report", 7);
+          respTopic[tlen - slen + 7] = '\0';
+
+          if (strstr((const char *)payload, "\"get_version\"")) {
+            char seq[16] = "0";
+            const char *s = strstr((const char *)payload, "\"sequence_id\"");
             if (s) {
-              s++;
-              while (*s == ' ' || *s == '\"') s++;
-              const char *e = s;
-              while (*e && *e != '\"' && *e != ' ' && *e != ',' && *e != '}') e++;
-              size_t slen = e - s;
-              if (slen > 0 && slen < sizeof(seq)) {
-                memcpy(seq, s, slen);
-                seq[slen] = 0;
+              s = strchr(s, ':');
+              if (s) {
+                s++;
+                while (*s == ' ' || *s == '\"') s++;
+                const char *e = s;
+                while (*e && *e != '\"' && *e != ' ' && *e != ',' && *e != '}') e++;
+                size_t slen = e - s;
+                if (slen > 0 && slen < sizeof(seq)) {
+                  memcpy(seq, s, slen);
+                  seq[slen] = 0;
+                }
               }
             }
-          }
 
-          char resp[384];
-          int rlen2 = snprintf(resp, sizeof(resp),
-            "{\"info\":{\"command\":\"get_version\",\"sequence_id\":\"%s\","
-            "\"version\":\"" VERSION "\",\"model\":\"%s\",\"online\":\"true\"}}",
-            seq, _cfg ? _cfg->printerModel : PRINTER_MODEL_DFLT);
-          sendPublish(c, localReportTopic, (uint8_t *)resp, rlen2, 0);
-        }
+            char resp[384];
+            const char *model = _cfg ? _cfg->printerModel : PRINTER_MODEL_DFLT;
+            const char *serial = _cfg ? _cfg->printerSerial : PRINTER_SERIAL_DFLT;
+            int rlen2 = snprintf(resp, sizeof(resp),
+              "{\"info\":{\"command\":\"get_version\",\"sequence_id\":\"%s\","
+              "\"version\":\"" VERSION "\",\"module\":\"%s\",\"model\":\"%s\","
+              "\"serial\":\"%s\",\"online\":\"true\"}}",
+              seq, model, model, serial);
+            sendPublish(c, respTopic, (uint8_t *)resp, rlen2, 0);
+          }
 
         if (strstr((const char *)payload, "\"pushall\"")) {
           char resp[512];
+          const char *serial = _cfg ? _cfg->printerSerial : PRINTER_SERIAL_DFLT;
           int rlen2 = snprintf(resp, sizeof(resp),
             "{\"print\":{\"command\":\"pushall\",\"sequence_id\":\"0\","
+            "\"serial\":\"%s\","
             "\"gcode_state\":\"IDLE\",\"subtask_name\":\"\",\"project_id\":\"\","
             "\"gcode_file\":\"\",\"mc_percent\":0,\"mc_remaining_time\":0,"
             "\"layer_num\":0,\"total_layer_num\":0,"
             "\"nozzle_temper\":25.1,\"nozzle_target_temper\":0,"
             "\"bed_temper\":25.2,\"bed_target_temper\":0,"
             "\"chamber_temper\":25.0,\"spd_mag\":100,"
-            "\"wifi_signal\":\"-50dBm\",\"sdcard\":true}}");
-          sendPublish(c, localReportTopic, (uint8_t *)resp, rlen2, 0);
+            "\"wifi_signal\":\"-50dBm\",\"sdcard\":true}}",
+            serial);
+          sendPublish(c, respTopic, (uint8_t *)resp, rlen2, 0);
         }
+      }
       }
 
       _pubsub.publish(requestTopic, payload, toRead, false);

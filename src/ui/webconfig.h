@@ -463,11 +463,55 @@ static void handleUpdateFromGithub() {
   Serial.println("GitHub update failed");
 }
 
+static bool isValidHost(const String &host) {
+  if (host.length() == 0) return false;
+
+  // Check if input looks like an IPv4 address (digits + dots only)
+  bool ipv4Like = true;
+  int dots = 0;
+  for (unsigned int i = 0; i < host.length(); i++) {
+    char c = host[i];
+    if (c == '.') dots++;
+    else if (c < '0' || c > '9') { ipv4Like = false; break; }
+  }
+
+  if (ipv4Like && dots == 3) {
+    // Validate every octet is 0-255
+    int octet = 0, seen = 0, val = 0;
+    for (unsigned int i = 0; i <= host.length(); i++) {
+      char c = (i < host.length()) ? host[i] : '.';
+      if (c >= '0' && c <= '9') {
+        val = val * 10 + (c - '0');
+      } else if (c == '.') {
+        if (i == 0 || host[i-1] == '.') return false; // empty or leading dot
+        if (val > 255) return false;
+        seen++;
+        val = 0;
+      }
+    }
+    return seen == 4;
+  }
+
+  // Hostname — accept
+  return true;
+}
+
 static void handleSave() {
   // Printer settings
   String host = _server.arg("printer_host");
   String code = _server.arg("printer_code");
   String serial = _server.arg("printer_serial");
+
+  if (host.length() > 0 && !isValidHost(host)) {
+    String err = FPSTR(_PAGE_SAVED);
+    err.replace("&#10003; Saved!", "&#10007; Invalid Host");
+    err.replace("<p>Settings stored. Rebooting&hellip;</p>",
+      "<p>The printer host &ldquo;" + host + "&rdquo; is not a valid IP address or hostname.</p>");
+    err.replace("<meta http-equiv=\"refresh\" content=\"3;url=/\">",
+      "<a href=\"/config/settings\" style=\"color:#58a6ff\">&larr; Back to Printer Settings</a>");
+    _server.send(200, "text/html; charset=utf-8", err);
+    return;
+  }
 
   if (host.length() > 0) {
     strlcpy(_cfg.printerHost, host.c_str(), sizeof(_cfg.printerHost));
