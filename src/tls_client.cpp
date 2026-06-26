@@ -1,7 +1,19 @@
 #include "tls_client.h"
 #include <string.h>
+#include <mbedtls/ssl_ciphersuites.h>
 
 #define TAG "TLS"
+
+// Force RSA key exchange cipher suites only (avoid ECDHE curve issues)
+static const int forced_ciphersuites[] = {
+  MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256,
+  MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384,
+  0
+};
+
+static void tls_debug(void *ctx, int level, const char *file, int line, const char *str) {
+  Serial.printf("TLSDBG: %s\n", str);
+}
 
 TlsWiFiClient::TlsWiFiClient() {
   mbedtls_ssl_init(&_ssl);
@@ -35,6 +47,7 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   r = mbedtls_ssl_config_defaults(&_conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
   if (r != 0) { Serial.printf("TLS: config defaults failed: -0x%x\n", -r); return false; }
 
+  mbedtls_ssl_conf_dbg(&_conf, tls_debug, NULL);
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
 
@@ -58,6 +71,12 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   r = mbedtls_ctr_drbg_seed(&_drbg, mbedtls_entropy_func, &_entropy, (const uint8_t *)TAG, strlen(TAG));
   if (r != 0) { Serial.printf("TLS: drbg seed failed: -0x%x\n", -r); return false; }
 
+  // Re-init cert/key in case constructor didn't fully reset
+  mbedtls_x509_crt_free(&_cert);
+  mbedtls_x509_crt_init(&_cert);
+  mbedtls_pk_free(&_pkey);
+  mbedtls_pk_init(&_pkey);
+
   r = mbedtls_x509_crt_parse(&_cert, certDer, certLen);
   if (r != 0) { Serial.printf("TLS: cert parse failed: -0x%x\n", -r); return false; }
 
@@ -68,6 +87,12 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   r = mbedtls_ssl_config_defaults(&_conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
   if (r != 0) { Serial.printf("TLS: config defaults failed: -0x%x\n", -r); return false; }
 
+  // Force TLS 1.2 minimum
+  mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+  mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+
+  mbedtls_ssl_conf_dbg(&_conf, tls_debug, NULL);
+  mbedtls_ssl_conf_ciphersuites(&_conf, forced_ciphersuites);
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
 
@@ -162,6 +187,21 @@ int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
   TlsWiFiClient *c = (TlsWiFiClient *)ctx;
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
   int r = c->_tcp->read(buf, len);
+  if (!c->_hsDone) {
+    if (r > 0) {
+      // Show first 64 bytes of ClientHello (first recv=header 0x16, second=body 0x01)
+      bool isHello = (buf[0] == 0x01) || (buf[0] == 0x16);
+      int show = isHello ? (r > 80 ? 80 : r) : (r > 16 ? 16 : r);
+      Serial.printf("TLS-RECV(ask=%d got=%d):", len, r);
+      for (int i = 0; i < show; i++) Serial.printf(" %02x", (unsigned)buf[i]);
+      if (r > show) Serial.printf(" ...");
+      Serial.printf("\n");
+    } else if (r == 0) {
+      Serial.printf("TLS-RECV: WANT_READ (ask=%d)\n", len);
+    } else {
+      Serial.printf("TLS-RECV: EOF (ask=%d)\n", len);
+    }
+  }
   if (r > 0) return r;
   if (r == 0) return MBEDTLS_ERR_SSL_WANT_READ;
   return MBEDTLS_ERR_SSL_CONN_EOF;
@@ -171,6 +211,14 @@ int TlsWiFiClient::bio_send(void *ctx, const unsigned char *buf, size_t len) {
   TlsWiFiClient *c = (TlsWiFiClient *)ctx;
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
   int r = c->_tcp->write(buf, len);
-  if (r > 0) return r;
+  if (r > 0) {
+    if (!c->_hsDone) {
+      int show = r > 16 ? 16 : r;
+      Serial.printf("TLS-SEND(ask=%d wrote=%d):", len, r);
+      for (int i = 0; i < show; i++) Serial.printf(" %02x", (unsigned)buf[i]);
+      Serial.printf("\n");
+    }
+    return r;
+  }
   return MBEDTLS_ERR_SSL_WANT_WRITE;
 }

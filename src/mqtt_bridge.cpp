@@ -2,6 +2,7 @@
 #ifdef ESP32
 #include <ESPmDNS.h>
 #include "tls_client.h"
+#include "test_cert.h"
 #endif
 
 static char reportTopic[64];
@@ -79,15 +80,15 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   _localServer.begin();
   _localServer.setNoDelay(true);
 
-  // Generate self-signed cert/key with CN matching gateway serial
+  // HACK: use openssl-generated cert+key for debugging
 #ifdef ESP32
-  _certLen = 0; _keyLen = 0;
-  if (generateCert(_cfg->gatewaySerial, _certDer, &_certLen, _keyDer, &_keyLen)) {
-    Serial.printf("MQTT: generated TLS cert CN=%s (%d+%d bytes)\n",
-                  _cfg->gatewaySerial, _certLen, _keyLen);
-  } else {
-    Serial.println("MQTT: cert generation FAILED — TLS disabled");
-  }
+  _certLen = test_cert_der_len;
+  _keyLen = test_key_der_len;
+  memcpy(_certDer, test_cert_der, _certLen);
+  memcpy(_keyDer, test_key_der, _keyLen);
+  Serial.printf("MQTT: using test cert (%d+%d bytes) first4=0x%02x%02x%02x%02x\n",
+                _certLen, _keyLen,
+                _certDer[0], _certDer[1], _certDer[2], _certDer[3]);
 #endif
 
   // TLS server on port 8883 (Bambu Studio connects here with TLS)
@@ -291,6 +292,13 @@ int MqttBridge::acceptClient() {
   WiFiClient *rawPtr = new WiFiClient(_tlsServer.accept());
   if (rawPtr && *rawPtr) {
     TlsWiFiClient *tls = new TlsWiFiClient();
+    Serial.printf("MQTT: cert at conn first4=0x%02x%02x%02x%02x len=%d keyLen=%d\n",
+                  _certDer[0], _certDer[1], _certDer[2], _certDer[3], _certLen, _keyLen);
+    Serial.print("CERT_FULL:");
+    for (int i = 0; i < _certLen; i++) {
+      Serial.printf("%02x", _certDer[i]);
+    }
+    Serial.println();
     bool ok = _certLen > 0 && tls->beginDer(rawPtr, _certDer, _certLen, _keyDer, _keyLen);
     if (ok) {
       // Start non-blocking TLS handshake; may return 0 (WANT_READ/WANT_WRITE)
