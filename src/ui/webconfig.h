@@ -84,10 +84,8 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 <div class="card" style="max-width:560px">
   <h2>Gateway Status</h2>
   <div style="margin:12px 0">
-    <div class="info-row"><span class="lbl">AP SSID</span><span class="val">%%AP_SSID%%</span></div>
-    <div class="info-row"><span class="lbl">Station</span><span class="val">%%STA_STATUS%%</span></div>
-    <div class="info-row"><span class="lbl">Printer</span><span class="val">%%PRINTER_HOST%%</span></div>
-    <div class="info-row"><span class="lbl">MQTT Link</span><span class="val">%%MQTT_STATUS%%</span></div>
+    <div class="info-row"><span class="lbl">WiFi</span><span class="val">%%STA_STATUS%%</span></div>
+    <div class="info-row"><span class="lbl">Printer Link</span><span class="val">%%MQTT_STATUS%%</span></div>
     <div class="info-row"><span class="lbl">Uptime</span><span class="val">%%UPTIME%%</span></div>
     <div class="info-row"><span class="lbl">Free Heap</span><span class="val">%%HEAP%%</span></div>
     <div class="info-row"><span class="lbl">Version</span><span class="val">%%VERSION%%</span></div>
@@ -99,7 +97,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
   <h2>Gateway Identity</h2>
   <div style="margin:12px 0">
     <div class="info-row"><span class="lbl">IP</span><span class="val">%%STA_IP%%</span></div>
-    <div class="info-row"><span class="lbl">Printer Name</span><span class="val">%%PRINTER_NAME%%</span></div>
+    <div class="info-row"><span class="lbl">Gateway Name</span><span class="val">%%PRINTER_NAME%%</span></div>
     <div class="info-row"><span class="lbl">Serial</span><span class="val">%%GATEWAY_SERIAL%%</span></div>
     <div class="info-row"><span class="lbl">Model</span><span class="val">%%PRINTER_MODEL%%</span></div>
     <div class="info-row"><span class="lbl">TLS Cert</span><span class="val"><a href="/cert" style="color:#58a6ff;text-decoration:none">Import &rarr;</a></span></div>
@@ -115,7 +113,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 .info-row .val.mid{color:#d29922}
 .info-row .val.down{color:#da3633}
 </style>
-<footer>(c) 2026 by <a href="https://www.bambutagger.de" target="_blank">BambuTagger</a></footer>
+<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
 </body>
 </html>
 )html";
