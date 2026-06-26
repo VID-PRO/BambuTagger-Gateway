@@ -23,11 +23,12 @@ TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT
 
 // SSDP (Simple Service Discovery Protocol) responder for Bambu Lab auto-detection.
 // Bambu Studio discovers printers via SSDP on UDP port 2021.
-// Real printers broadcast NOTIFY every ~10s to 255.255.255.255:2021.
+// Real printers broadcast NOTIFY every ~10s to 239.255.255.250:2021.
 // They also respond to M-SEARCH sent to multicast 239.255.255.250:2021.
 static const uint16_t SSDP_PORT = 2021;
 static WiFiUDP _ssdpUdp;
 static bool _ssdpReady = false;
+static unsigned long _ssdpLastNotify = 0;
 char _displayName[32] = "BambuTagger-Gateway";
 
 static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bool isResponse) {
@@ -81,28 +82,22 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
 // and respond to M-SEARCH queries from Bambu Studio.
 static void startSSDP(const GatewayConfig *cfg) {
   if (_ssdpReady) return;
-  IPAddress local = WiFi.localIP();
-  if (local == IPAddress(0, 0, 0, 0)) return;
+  if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) return;
 
-  if (!_ssdpUdp.begin(SSDP_PORT)) {
-    Serial.println("SSDP: failed to bind port 2021");
-    return;
-  }
-
-  // Join the SSDP multicast group (239.255.255.250) so we hear M-SEARCH queries
-  // from Bambu Studio.
   IPAddress mcast(239, 255, 255, 250);
-  ip4_addr_t ifaddr;
-  ifaddr.addr = (uint32_t)local;
-  ip4_addr_t mcaddr;
-  mcaddr.addr = (uint32_t)mcast;
-  if (igmp_joingroup(&ifaddr, &mcaddr) == ERR_OK) {
-    Serial.println("SSDP: joined multicast 239.255.255.250");
+  if (_ssdpUdp.beginMulticast(mcast, SSDP_PORT)) {
+    Serial.println("SSDP: bound to port 2021, joined multicast 239.255.255.250");
   } else {
+    // fallback: bind unicast only, send NOTIFY on broadcast
+    if (!_ssdpUdp.begin(SSDP_PORT)) {
+      Serial.println("SSDP: failed to bind port 2021");
+      return;
+    }
     Serial.println("SSDP: WARNING multicast join failed — NOTIFY-only mode");
   }
 
   _ssdpReady = true;
+  _ssdpLastNotify = 0;
   Serial.printf("SSDP: listening on UDP port %d\n", SSDP_PORT);
 }
 
@@ -113,9 +108,21 @@ static void stopSSDP() {
   }
 }
 
-// Handle incoming SSDP messages (M-SEARCH) and respond.
+// Handle incoming SSDP messages (M-SEARCH) and send periodic NOTIFY.
 static void loopSSDP(const GatewayConfig *cfg) {
   if (!_ssdpReady) return;
+
+  unsigned long now = millis();
+
+  // Periodic NOTIFY broadcast (real printers send every ~10s)
+  if (now - _ssdpLastNotify > 10000) {
+    _ssdpLastNotify = now;
+    char buf[512];
+    buildSsdpmessage(cfg, buf, sizeof(buf), false);
+    _ssdpUdp.beginPacket(IPAddress(255, 255, 255, 255), SSDP_PORT);
+    _ssdpUdp.write((const uint8_t *)buf, strlen(buf));
+    _ssdpUdp.endPacket();
+  }
 
   // Check for incoming M-SEARCH packets
   int packetSize = _ssdpUdp.parsePacket();
@@ -128,8 +135,9 @@ static void loopSSDP(const GatewayConfig *cfg) {
 
       // Respond if this is an M-SEARCH for Bambu printers or ssdp:all
       if (msg.indexOf("M-SEARCH") >= 0 &&
-          (msg.indexOf("urn:bambulab-com:device:3dprinter:1") >= 0 ||
-           msg.indexOf("ssdp:all") >= 0)) {
+          (msg.indexOf("bambu") >= 0 ||
+           msg.indexOf("ssdp:all") >= 0 ||
+           msg.indexOf("upnp:rootdevice") >= 0)) {
         char resp[512];
         buildSsdpmessage(cfg, resp, sizeof(resp), true);
         _ssdpUdp.beginPacket(_ssdpUdp.remoteIP(), _ssdpUdp.remotePort());
