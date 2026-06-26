@@ -17,6 +17,7 @@ public:
   int continueHandshake();  // 1=done, 0=busy, -1=error
   bool isTls() { return _ok && _tcp; }
   bool handshakeDone() { return _hsDone; }
+  void tcpSetNoDelay(bool nodelay) { if (_tcp) _tcp->setNoDelay(nodelay); }
 
   void stop() override;
   size_t write(uint8_t b) override;

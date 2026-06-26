@@ -13,59 +13,53 @@ static char localRequestTopic[64];
 // Retained in PROGMEM for future mbedTLS-based TLS server and /cert download page.
 static const char tls_cert[] PROGMEM = R"KEY(
 -----BEGIN CERTIFICATE-----
-MIID/TCCAuWgAwIBAgIJAI1cw5dxX/X+MA0GCSqGSIb3DQEBCwUAME8xHDAaBgNV
-BAMME0JhbWJ1VGFnZ2VyLUdhdGV3YXkxIjAgBgNVBAoMGUJCTCBUZWNobm9sb2dp
-ZXMgQ28uLCBMdGQxCzAJBgNVBAYTAkNOMCAXDTI2MDYyNTIzNTMzM1oYDzIxMjYw
-NjAxMjM1MzMzWjBPMRwwGgYDVQQDDBNCYW1idVRhZ2dlci1HYXRld2F5MSIwIAYD
-VQQKDBlCQkwgVGVjaG5vbG9naWVzIENvLiwgTHRkMQswCQYDVQQGEwJDTjCCASIw
-DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMYmKeA0FL97aQnhtcSjau40pTK/
-OJOF8aCJXhlMguVIQngsQS6bHOgZlfhrOD288kTHgxfrAcXEWifwjlQ1OqzVApyO
-5K3t7G5hv8kmIhi34ymRYuy7QaD7iWwllupP4Epj8RkuwOl4BUas9sIo8E8kzpYE
-1w10s6nwwkePBSuC7LIVcsPBCOFowgpxI0HYEd+eTx7DstlW4kw2zSqSWk8DAOzh
-ICSRn1KaheeNrtMwMBusBdgIhnzjSJluQjhoYSadfDgKHtEKy/qxr5f0V/JfKIVG
-x9u4mRTP2JtU5CJVvfiPl/Tosk4zU+FOUpELudQZ0ci0iFY/4z1s+SIG+8ECAwEA
-AaOB2TCB1jAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwICpDATBgNVHSUE
-DDAKBggrBgEFBQcDATAdBgNVHQ4EFgQUz0/03xvJMUkx66EeOfudkD5hwR8wfwYD
-VR0jBHgwdoAUz0/03xvJMUkx66EeOfudkD5hwR+hU6RRME8xHDAaBgNVBAMME0Jh
-bWJ1VGFnZ2VyLUdhdGV3YXkxIjAgBgNVBAoMGUJCTCBUZWNobm9sb2dpZXMgQ28u
-LCBMdGQxCzAJBgNVBAYTAkNOggkAjVzDl3Ff9f4wDQYJKoZIhvcNAQELBQADggEB
-AMIAZT7MHfMB8iJAoLW1GkZEO4PW+boVajpZggDAKU9CRmg22BvDBeJspl3oKGVi
-w1bxNsPBAb+NptK+aDrnmN0w+G1dJgWVEp81iOp929EH4az6P9AQnMsGDWOjaD18
-SCviuNLzk/nzMue+mQ+NINZAYXJNfc3CJbaIvJcmFVK04fD0tDhLn80y7RX3TPSH
-l4Du5XBUv5cdxDEy0fBe2ZYC5mV/sOKBWFO2qnKnC2Dn0P8hCfJM9KhGsKcTftDu
-Z3W7/cOpYBv+Yc1lUDhBfdMLlhI3eWUNANg8LjPRWO27yYiFNE6Oo+ErwCro81iy
-owe+zlAvYyFvO5lvhbA8EOo=
+MIIC8jCCAdoCCQDuX4ec4T/GEDANBgkqhkiG9w0BAQsFADA7MRgwFgYDVQQDDA8y
+MkU4Qko1QjA5MDA2ODUxEjAQBgNVBAoMCUJhbWJ1IExhYjELMAkGA1UECwwCVVMw
+HhcNMjYwNjI2MTUyNTA0WhcNMzYwNjIzMTUyNTA0WjA7MRgwFgYDVQQDDA8yMkU4
+Qko1QjA5MDA2ODUxEjAQBgNVBAoMCUJhbWJ1IExhYjELMAkGA1UECwwCVVMwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCi2SaxgiaAsZH7Ia0F6fh7guov
+Wpyd9kEHrUxLHMHOkLEnh81kQr1PC1zplRLtKHaqu5UHVYL7eUP6k/T1jeqiPKKS
+R7wQJuwK60lRMRVpvalEOL3uDu0jCgAbBl4syWcuV8m2Lk8FkDQ+kdqONrjUZ27Q
+BR0LLj5UH9NgecP/Kvpyg1nsSnRrzYmusn7Kr3bMwq5FT+lx5hQGEYUnskVV7NPq
+90Es/xvA4EXNBHsxvhPdwXdNx8D+mbhM3DSRYkrsmgpsRhUxpaxvhw2mgBa6Kct/
+LUgwmmnzLi0r4FnpMV9IoNEFG9kC26uY7+TrK6ssGny8pWUrY+0lH7Ol+NoPAgMB
+AAEwDQYJKoZIhvcNAQELBQADggEBAHylQByCwF6EudYe41OUbyy2oTrtS+SdeEth
+LeqI2L2s89xeOddS8fh80pHuVZz6YvRteX6ozbV+CpcOacuElSbxSDKdrLZEMZ5v
+PU6nOIVJB1rnPACQgLVnhYI/RE8e6S3KMj+eiT7YbbZVHyeqaRERlWcbR5tTvh7g
+TrgVfMuv1EUIQNx8tKvkHA/aasctzm5Q87zdoi92yNKlxWhZy5v4hjqwcrIzcNpZ
+Hp+/s2OdURvyvWWeTq4lvMieCptwQhzUobnU+p0zLaw2tGXroSNf/CpF9eBGBxgK
+3U9EkXc4x6jiX71A2K7JqhbQhXAXUQnNrBfgNwbKpwYmG3d2qP8=
 -----END CERTIFICATE-----
 )KEY";
 
 static const char tls_key[] PROGMEM = R"KEY(
 -----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDGJingNBS/e2kJ
-4bXEo2ruNKUyvziThfGgiV4ZTILlSEJ4LEEumxzoGZX4azg9vPJEx4MX6wHFxFon
-8I5UNTqs1QKcjuSt7exuYb/JJiIYt+MpkWLsu0Gg+4lsJZbqT+BKY/EZLsDpeAVG
-rPbCKPBPJM6WBNcNdLOp8MJHjwUrguyyFXLDwQjhaMIKcSNB2BHfnk8ew7LZVuJM
-Ns0qklpPAwDs4SAkkZ9SmoXnja7TMDAbrAXYCIZ840iZbkI4aGEmnXw4Ch7RCsv6
-sa+X9FfyXyiFRsfbuJkUz9ibVOQiVb34j5f06LJOM1PhTlKRC7nUGdHItIhWP+M9
-bPkiBvvBAgMBAAECggEAO3TeIeFezGoqhYWNtjhW8K0pWMXaIyIQ89vkOXEk4cnB
-8C9PS73NebObtZPup0/X3l2Db5zbxkz5xHxBKPFj7tJn2zRhV/NJe4GnO6NOnd4n
-sqRma6Rwt+5iOOo6k4puQcQlZyoJRsT1yFREItSH7yebOZawNOBsvLR6h2BZ68jx
-Hcax4Cpz7Fl3x+wgPIyF9CoFZt7sXpVjTzC4pgp9JC5EF0d+kLrZMP1ODTydlmtH
-XZiy//JGoL9WLL3aBIJT5IRvZajrrvFri35IevZh++mWcMT9zqfffdXrZxoBQeV0
-wbJMl/MDB+n9FLKKu7JWzDZlU6dULB/6d74sHsj+xQKBgQDprWjgJItF6VrOpqWw
-k6m715W2O0rM2flBx1Typ+IuhOl2TGgGeKDHxN/0afmPe/1dUAGvRfVe+rNuJNEq
-e4t/eSqv3xKRVqow3/dtDOaPFFj0xAm1rxSTTQNKRv9csE2Wzbw3KCK1IF/y5atL
-1bw9LDbVpGDNJrGEQ8H1sFA0HwKBgQDZE+hegzDdm0G4yl17f3MGmWtlmU3e4hC0
-aoiGmWcjLQFxCg4KtgLpfp8S211vlVyJO3ACcIYR+fQWpmTy8awtAIMpvOBc73yF
-84GlD4Op7rtiANom/q2aGVNk093cywboZGq1jqSzu2w8pAETfHwD5/wq95n97GTf
-74tu9fnUHwKBgHA8wGDYbKS5vsn/NRoo8p+sntYWiIj4MUas7VpX1MWvRUtyy4xA
-KEmLgF4vAJUwYrONGCINohtqowBGYsja6lfh5OTwakSwsbIkAP258ovKpCd8eYVw
-gJt3pBrrGwB0FfBXBQ4hEvqYgD10nuAf2vgu4m+fMneXHDCBMwpFE2DVAoGAVZYa
-xMC20Hi5JdFroBh00oJErK8P27OH4IosP91Vo7HH4riTJrfyV/sbXsTshuT9sgGk
-POH+ijHhgdii7oJIXwnXrOoSD7JAh1Olpt2CDMraSF6LpFo/OgWIMrWxwK6vj4qf
-4+tUlqRrnVEQN42aG7QoYQx0Q4AjmYMJl3sVwAMCgYEAh5e0wacJgrPrnW+uNWKw
-WxOt96UbeAgRxTH5VDeld0WD+PvsEA53fZDo23tGn9kcQRlC8o6Oihc0JmMizW6D
-iej768hVc0sC89dEkYs2hYhd5W65u+meLEh/mPzKpshHQWMlvRWFe981fd8UPqC+
-jdY9rChFu/pNLg811ar1550=
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCi2SaxgiaAsZH7
+Ia0F6fh7guovWpyd9kEHrUxLHMHOkLEnh81kQr1PC1zplRLtKHaqu5UHVYL7eUP6
+k/T1jeqiPKKSR7wQJuwK60lRMRVpvalEOL3uDu0jCgAbBl4syWcuV8m2Lk8FkDQ+
+kdqONrjUZ27QBR0LLj5UH9NgecP/Kvpyg1nsSnRrzYmusn7Kr3bMwq5FT+lx5hQG
+EYUnskVV7NPq90Es/xvA4EXNBHsxvhPdwXdNx8D+mbhM3DSRYkrsmgpsRhUxpaxv
+hw2mgBa6Kct/LUgwmmnzLi0r4FnpMV9IoNEFG9kC26uY7+TrK6ssGny8pWUrY+0l
+H7Ol+NoPAgMBAAECggEADBidKypDueN2uHSz6XCLqID87C+K2qDkC7HvrNSiALn2
+rr0DoKLkdO6fJCqSkVMkHWJ5m2XaqNtFFWPQGj1EZHCkksEJUxnRBq6bb5B5yrTv
+0cV1Ni2dp7CieV9rt1/ubh7PON0PuZYQi2VCGrYt3HkiXglDMwVoU89ZYB0rVdS5
+DN4ANvuQwC6asqYiQkDnMrnDwDMZxXVcly2476w2JXfyL2teR8YWN5Z62wQOSPPw
+m22eZXVLtPqmc9+izwmUm0wYV9Ly3n1Mlxt7qhQKKSe+g2xqzv7cALkkUyawqgmX
+K9J71V/0dE6wxH8NpdlFvC0MOTf5jJjL4RzAW1YTwQKBgQDXqi7ZMUtHf2r/p6dg
+IcOA0pz4ZsShl6mPMY27ouY6BafH+CmQtq+YXKdv7vZAp+xpq+ROhkZIWDv0axfH
+eRLwQIGPHYE+eKB9Pm177IC0pgFORy343xPLtO0RxNcChaGI5ySX3uI614hjqqbq
+grHLwcq/MnriCKUUaYq7MkX4NwKBgQDBTioqOThn1ek5ZXLGtjfScms1B5+Uz/mE
+zT27xbxh5Am+yDr70FKQWGfTeZBedKqq2+w1cvW8Q5YrdBA4/0HpCQjvN3T5JSIN
+F9qHIHSJj/TCeAA+hWU5gYHXO4uPTfy8pLYWqKe/LlCzQPaeA/vkmRLtYY60iefX
+KO620S2Q6QKBgDFlrpNa4hY/Th++o+y17xS7qO6Qg2tL1K+StxcKSddyYirAYaze
+2zt3xXYy8r5+d/0APSvrP3/kjd7/BJRQ3BChhctlA6xubrwhJ2yiEBzQhS4LybDe
+T6dyCnbuch0GxKgZ4VzT1VeK9Jd3iAHg655zBeBjTJgnSMBzKC6WZkZjAoGARadj
+vCk4MPo8eskabY31WWiPRuGDWD0EnRzTlNiwg9mGxW8jCd/MEGU6rFIOemqxoLV0
+TOIqt/bmoqvEuLUJy+3MgV5LUQdXWL5yqORB+duch4J0HBM3IVyQK70yEaY5XsQ/
+NLT7FQGcZKsQ8mlfF8Uss8rGgDl9B+Og+NExCRkCgYEAgY+qjFrWS9TIPUmHALZJ
+Fz7tqQwjRqCXMDcbT+eIGE3dj+xQuOPeQX8508h+EUQr/WIMSvEPRUqrpgbSFyX0
+/DXQdwpbZ5bnnY4tt306+88Ps5AGrrRWOzWG0DP6HhQ8xYI6wbgjZa8owQzk4ATQ
+zivq3hl5nIWP2vHcf88V7MU=
 -----END PRIVATE KEY-----
 )KEY";
 
@@ -153,7 +147,17 @@ void MqttBridge::loop() {
   static unsigned long lastDiag = 0;
   unsigned long now = millis();
   int active = 0;
-  for (int i = 0; i < MAX_MQTT_CLIENTS; i++) if (_clients[i].active) active++;
+  for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
+    if (!_clients[i].active) continue;
+    active++;
+#ifdef ESP32
+    if (_clients[i].isTls && now - lastDiag > 5000) {
+      TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(_clients[i].client);
+      Serial.printf("MQTT: cl%d conn=%d avail=%d hs=%d\n", i,
+        tls->connected(), tls->available(), tls->handshakeDone());
+    }
+#endif
+  }
   if (active > 0 && now - lastDiag > 10000) {
     lastDiag = now;
     Serial.printf("MQTT: %d active client(s)\n", active);
@@ -171,14 +175,16 @@ void MqttBridge::loop() {
       TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(_clients[i].client);
       if (!tls->handshakeDone()) {
         int hs = tls->continueHandshake();
-        if (hs < 0) { disconnectClient(i); continue; }
+        if (hs < 0) {
+          Serial.printf("MQTT: TLS hs failed for client %d\n", i);
+          disconnectClient(i); continue;
+        }
         if (hs == 0) continue; // handshake still busy
+        Serial.printf("MQTT: TLS hs complete for client %d\n", i);
       }
     }
 #endif
-    if (_clients[i].client->available()) {
-      handleClient(i);
-    }
+    handleClient(i);
   }
 }
 
@@ -301,15 +307,14 @@ int MqttBridge::acceptClient() {
   WiFiClient *c = nullptr;
 
   // Check TLS server (port 8883) — Bambu Studio connects here with TLS
-  WiFiClient raw = _tlsServer.accept();
-  if (raw) {
-    WiFiClient *rawPtr = new WiFiClient(raw);
+  WiFiClient *rawPtr = new WiFiClient(_tlsServer.accept());
+  if (rawPtr && *rawPtr) {
     TlsWiFiClient *tls = new TlsWiFiClient();
     if (tls->begin(rawPtr, tls_cert, tls_key)) {
       // Start non-blocking TLS handshake; may return 0 (WANT_READ/WANT_WRITE)
       int hs = tls->continueHandshake();
       if (hs < 0) {
-        Serial.printf("MQTT: TLS handshake failed\n");
+        Serial.printf("MQTT: TLS handshake failed from %s\n", rawPtr->remoteIP().toString().c_str());
         delete tls;
         return -1;
       }
@@ -317,10 +322,13 @@ int MqttBridge::acceptClient() {
       isTls = true;
       Serial.printf("MQTT: TLS client from %s (hs=%d)\n", rawPtr->remoteIP().toString().c_str(), hs);
     } else {
+      Serial.printf("MQTT: TLS begin failed from %s\n", rawPtr->remoteIP().toString().c_str());
       delete tls;
       delete rawPtr;
       return -1;
     }
+  } else {
+    delete rawPtr;
   }
 
   if (!c) {
@@ -336,7 +344,13 @@ int MqttBridge::acceptClient() {
     delete c;
     return -1;
   }
-  c->setNoDelay(true);
+  // Set TCP_NODELAY on the real socket
+#ifdef ESP32
+  if (isTls) {
+    static_cast<TlsWiFiClient*>(c)->tcpSetNoDelay(true);
+  } else
+#endif
+    c->setNoDelay(true);
 
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) {
@@ -374,21 +388,24 @@ void MqttBridge::handleClient(int idx) {
   WiFiClient &c = *cl.client;
 
   uint8_t header;
-  if (!readByte(c, header)) return;
+  if (!readByte(c, header)) {
+#ifdef ESP32
+    if (_clients[idx].isTls) {
+      TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(&c);
+      Serial.printf("MQTT: cl%d no data (avail=%d tcp=%d)\n", idx,
+        tls->available(), tls->connected());
+    }
+#endif
+    return;
+  }
   cl.lastActivity = millis();
 
-  // Log first bytes once per client
+  // Log first MQTT packet type from each client
   static bool logged[8] = {};
   if (idx >= 0 && idx < 8 && !logged[idx]) {
     logged[idx] = true;
-    Serial.printf("MQTT: first byte 0x%02x from client %d\n", header, idx);
-    if (header == 0x10) {
-      Serial.println("MQTT: => plain MQTT CONNECT");
-    } else if (header == 0x16 || header == 0x17) {
-      Serial.println("MQTT: => TLS handshake (TLS not supported on this port)");
-    } else {
-      Serial.printf("MQTT: => unknown protocol (type=%d)\n", (header >> 4) & 0x0F);
-    }
+    uint8_t type = (header >> 4) & 0x0F;
+    Serial.printf("MQTT: client %d first pkt type=%d\n", idx, type);
   }
 
   uint8_t type = (header >> 4) & 0x0F;
@@ -404,6 +421,7 @@ void MqttBridge::handleClient(int idx) {
         remaining -= chunk;
       }
       sendConnAck(c, false, 0);
+      Serial.printf("MQTT: ConnAck sent to client %d\n", idx);
       break;
     }
 

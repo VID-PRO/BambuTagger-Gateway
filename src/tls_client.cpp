@@ -109,7 +109,7 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
   if (!_ok || !_hsDone) return -1;
   int r = mbedtls_ssl_read(&_ssl, buf, size);
   if (r < 0) {
-    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return 0;
+    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return -1;
     _ok = false;
     return -1;
   }
