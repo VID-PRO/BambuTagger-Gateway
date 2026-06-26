@@ -21,7 +21,7 @@ using WebServer = ESP8266WebServer;
 
 
 #define EEPROM_SIZE 512
-#define EEPROM_MAGIC 0x44
+#define EEPROM_MAGIC 0x45
 
 extern MqttBridge mqtt;
 

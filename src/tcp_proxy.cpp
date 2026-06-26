@@ -23,6 +23,8 @@ void TcpProxy::begin() {
 void TcpProxy::loop() {
   // Don't attempt upstream connection without station WiFi (avoids DNS errors)
   if (!WiFi.isConnected()) return;
+  // Don't attempt upstream connection without a configured remote host
+  if (strlen(_remoteHost) == 0) return;
 
   if (!_upstream.connected()) {
     unsigned long now = millis();

@@ -143,19 +143,18 @@ static void loopSSDP(const GatewayConfig *cfg) {
 
 static void startAP(uint8_t mode = WIFI_AP_STA) {
   WiFi.persistent(false);
-  WiFi.mode(WIFI_OFF);
-  delay(500);
   WiFi.mode((WiFiMode_t)mode);
   delay(100);
   WiFi.setSleep(false);
   delay(100);
-  if (WiFi.softAP("BambuTagger-Gateway")) {
-    Serial.printf("AP started: %s IP %s\n", "BambuTagger-Gateway",
-      WiFi.softAPIP().toString().c_str());
-  } else {
-    Serial.println("AP FAILED to start");
+  if (!WiFi.softAP("BambuTagger-Gateway")) {
+    Serial.println("AP FAILED");
+    return;
   }
-  Serial.printf("WiFi mode: %d\n", WiFi.getMode());
+  Serial.printf("AP: %s  IP: %s  mode: %d\n",
+    "BambuTagger-Gateway",
+    WiFi.softAPIP().toString().c_str(),
+    WiFi.getMode());
 }
 
 static void manageAP() {
@@ -220,9 +219,11 @@ void setup() {
   // Start WiFi in AP or AP+STA mode depending on whether station is configured.
   if (strlen(cfg->stationSsid) > 0) {
     startAP(WIFI_AP_STA);
+    Serial.printf("Connecting to WiFi: %s\n", cfg->stationSsid);
     WiFi.begin(cfg->stationSsid, cfg->stationPass);
   } else {
     startAP();
+    Serial.println("No station configured — AP only");
   }
 
   // Now start TCP servers (lwIP is initialized by WiFi in either mode)
@@ -251,7 +252,7 @@ void setup() {
 }
 
 static void startStationServices(GatewayConfig *cfg) {
-  Serial.printf("Station connected — IP: %s  AP stopped  heap: %u\n",
+  Serial.printf("Station connected — IP: %s  heap: %u\n",
     WiFi.localIP().toString().c_str(), ESP.getFreeHeap());
 
   delay(500);
@@ -285,14 +286,22 @@ void loop() {
   webconfigLoop();
   manageAP();
 
-  // Debug AP status every 10 seconds
-  static unsigned long lastApDbg = 0;
+  // Debug AP status every 2 seconds
+  static int lastStaCount = -1;
+  static int lastMode = -1;
+  static int lastStatus = -1;
+  static unsigned long lastDbg = 0;
   unsigned long now = millis();
-  if (now - lastApDbg > 10000) {
-    lastApDbg = now;
-    Serial.printf("AP: mode=%d IP=%s stations=%d\n",
-      WiFi.getMode(), WiFi.softAPIP().toString().c_str(),
-      WiFi.softAPgetStationNum());
+  int sc = WiFi.softAPgetStationNum();
+  int mo = WiFi.getMode();
+  int ws = WiFi.status();
+  if ((sc != lastStaCount || mo != lastMode || ws != lastStatus || now - lastDbg > 2000) && now - lastDbg > 500) {
+    lastStaCount = sc;
+    lastMode = mo;
+    lastDbg = now;
+    Serial.printf("mode=%d AP=%s sta=%d staCon=%d wl=%d heap=%u\n",
+      mo, (mo == 2 || mo == 3) ? WiFi.softAPIP().toString().c_str() : "-",
+      sc, WiFi.isConnected(), ws, ESP.getFreeHeap());
   }
 
   // Start station services (MDNS, OTA, SSDP) on first station connection
