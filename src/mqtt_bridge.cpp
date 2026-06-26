@@ -115,19 +115,18 @@ const char *MqttBridge::getTlsCert() {
 
 void MqttBridge::loop() {
   if (!_upTcp || !_pubsub.connected()) {
-    // Don't attempt upstream MQTT until printer is configured and station WiFi is up
-    if (!WiFi.isConnected()) return;
-    if (_cfg && strlen(_cfg->printerHost) == 0) return;
-
-    unsigned long now = millis();
-    if (now - _lastReconnect > 5000) {
-      _lastReconnect = now;
-      if (connectUpstream()) {
-        for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
-          if (_clients[i].active) {
-            for (uint8_t s = 0; s < _clients[i].subCount; s++) {
-              _pubsub.subscribe(_clients[i].subs[s].topic.c_str(),
-                                _clients[i].subs[s].qos);
+    // Attempt upstream MQTT connection (only if printer is configured and WiFi is up)
+    if (WiFi.isConnected() && _cfg && strlen(_cfg->printerHost) > 0) {
+      unsigned long now = millis();
+      if (now - _lastReconnect > 5000) {
+        _lastReconnect = now;
+        if (connectUpstream()) {
+          for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
+            if (_clients[i].active) {
+              for (uint8_t s = 0; s < _clients[i].subCount; s++) {
+                _pubsub.subscribe(_clients[i].subs[s].topic.c_str(),
+                                  _clients[i].subs[s].qos);
+              }
             }
           }
         }
