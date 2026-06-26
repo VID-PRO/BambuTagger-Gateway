@@ -9,9 +9,8 @@ static char requestTopic[64];
 static char localReportTopic[64];
 static char localRequestTopic[64];
 
-// Self-signed cert + key for local TLS (currently unused — ESP32-C3 uses plain WiFiServer).
-// Retained in PROGMEM for future mbedTLS-based TLS server and /cert download page.
-static const char tls_cert[] PROGMEM = R"KEY(
+// Static PEM cert kept for web UI download page (informational only)
+static const char tls_cert_dl[] PROGMEM = R"KEY(
 -----BEGIN CERTIFICATE-----
 MIIDOTCCAiGgAwIBAgIJAN9wuTIhwnWsMA0GCSqGSIb3DQEBCwUAMEsxGDAWBgNV
 BAMMDzIyRThCSjVCMDkwMDY4NTEiMCAGA1UECgwZQkJMIFRlY2hub2xvZ2llcyBD
@@ -32,37 +31,6 @@ WgpvLObfrstZxbzdIeoK12HjrgAEbjnGiVSSVUlV/WV/guJpiUp+lJnxHRYd9m41
 PHsYZpbQZ4yyztwq6RZEffvQc3ptnlW647PvRDjS6maU+Q6ZwAMyIrbnZTXTlo5z
 n3Oz5NrOghaKbMs3uA==
 -----END CERTIFICATE-----
-)KEY";
-
-static const char tls_key[] PROGMEM = R"KEY(
------BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCfrv3ghg80DSUv
-nDkf+jld3TCXD8hEE80Wc8AY1jpz9cH8/mCt7rS8t3sZb7gBByAnVFKfAI7p36Dd
-ynJRJHvhwqPUj42ev9t+PNnu1bHB7qPeK/0TxRYUU/sZNflMnlh51WEmDS08BEmr
-H8c0nCNYWVfYRPi6TNYMg4xYqGEqTUzo9RWsW44T+6NTlymJpFZM2HaT7OyYsFI0
-XRAmu6bQG8ROL4xx0SlkYfLnUumULLnwlDPZvuwAB7swWeErD0eSyN0Kx4GMjZMH
-x2+RiGm1bUO0UMRla/xv11DlU4ObKC5p5/f+qewaS+QLaO6UM8cVgeG02rPEUl4O
-P2Li+zJPAgMBAAECggEAUbs3ppv3XCT+S4gilQN2KVz1adxiHLYl2sAUKqI7+O5p
-BB0PTvdG+vDOyQ4tmBkVlAvM3iVjAMG9jMf6Cx4pajw9rqZrTj3VEqACzAQEn8aN
-iUHqnxvZWT5C33yIxXamwnU87EUCSh3Htxbk10CztpzEIaXryS9av7z1MMu+L+/h
-pplJTg6Eblrqrib42DDvl/f9I4mM5V9RI9xlVCHm0sxDfhES7M7a73/lBE8QOR+X
-wx9jWDWYRGr1NXaVRDQ1bnvmAlr6Sq9fZaPPrV3g86rbOPe46KPsUOgMrwEhlpxy
-sZoa6JLm1Orteb4pZ6z9Uk+sqVraMVUpMrDyrBM0QQKBgQDTgwp92I5N9LogfOpD
-ia5fbBm/yxzklu1Q4Lu3/TtVLkRqxTJjNSMr5nhg4i2gm6C/+hb6REQPrpR3kxHE
-zoKc138WdmDLfhPa9T7KLADx7k5bMQNjegGmKAGSxQWAa51WWcD3q1RX7jv+DGPo
-OxQK82RlpiN3XvNABoLZD6w7AwKBgQDBRTrhR85UmV6A/7Dvh9qNfdcoYRd2GIC2
-NLHR5mibeMoNkOQfDqGZIaNS26ijkuSeyc3T/i476eC4xii1R+bkd9/P/s+gtJdQ
-fH/QTwTTKf/XFVI/pG8AGKr2TZ+jJkbxHDRWc9TxOFIQFn9qEOi/fx+hHAd+utou
-4d3VQABDxQKBgCiTDsQtcr8Jn1r0G4xxMP4lIptkP1qqiUPmmJwm++bPRVimE5Bs
-dR7Ky3Tqbo5MzH2HYDkKN3Q6rUhy8gmrA+tKe5q3gsIGoZBzU2Q9JMFEUcu0j03Z
-7c8OBZ8+JFwKSNhzx0y7lSZ5EREfF1tJWgLvxeaqBEu17zvtA9TX6NY5AoGAJd8U
-/JP/gGBVPl3cI/OxBczE3mq4GDIQ9qM4vPKzSNPQc/wSV2ucis8mm9PjJbphBiRx
-KrtCAAeCO3LJA0zFl7tNpgo+UTVR+TmMKhtxzJcMRO8uoL3t6kzrIzxurZ+QgyqN
-rusfrOzmV7Sw3u3VTcDxR7agWVrv6gPkXiceZikCgYEAvG3wl0rUpDIpqSpyiD/b
-H/8HbjbLx0jjrfo4zLlN/WBastzKGU5kxJm6j4WhCzZvKg6OqTiQLLN4dlJRCD7/
-SKyKgRc1Aw/OM/HLHZSyMoMmVAhurEvVaYZfQL40JiGhpcfyt5IbdbwA0ImS45O2
-RlmKjq4FgQA4W9tTB5QCfjU=
------END PRIVATE KEY-----
 )KEY";
 
 MqttBridge::MqttBridge()
@@ -111,14 +79,25 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   _localServer.begin();
   _localServer.setNoDelay(true);
 
-  // Plain TCP server on 8883 (Bambu Studio connects here; TLS not used when Devseclink=lan)
+  // Generate self-signed cert/key with CN matching gateway serial
+#ifdef ESP32
+  _certLen = 0; _keyLen = 0;
+  if (generateCert(_cfg->gatewaySerial, _certDer, &_certLen, _keyDer, &_keyLen)) {
+    Serial.printf("MQTT: generated TLS cert CN=%s (%d+%d bytes)\n",
+                  _cfg->gatewaySerial, _certLen, _keyLen);
+  } else {
+    Serial.println("MQTT: cert generation FAILED — TLS disabled");
+  }
+#endif
+
+  // TLS server on port 8883 (Bambu Studio connects here with TLS)
   _tlsServer.begin();
   _tlsServer.setNoDelay(true);
   Serial.println("MQTT: server ready on port 8883");
 }
 
 const char *MqttBridge::getTlsCert() {
-  return tls_cert;
+  return tls_cert_dl;
 }
 
 void MqttBridge::loop() {
@@ -312,7 +291,8 @@ int MqttBridge::acceptClient() {
   WiFiClient *rawPtr = new WiFiClient(_tlsServer.accept());
   if (rawPtr && *rawPtr) {
     TlsWiFiClient *tls = new TlsWiFiClient();
-    if (tls->begin(rawPtr, tls_cert, tls_key)) {
+    bool ok = _certLen > 0 && tls->beginDer(rawPtr, _certDer, _certLen, _keyDer, _keyLen);
+    if (ok) {
       // Start non-blocking TLS handshake; may return 0 (WANT_READ/WANT_WRITE)
       int hs = tls->continueHandshake();
       if (hs < 0) {
@@ -394,8 +374,17 @@ void MqttBridge::handleClient(int idx) {
 #ifdef ESP32
     if (_clients[idx].isTls) {
       TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(&c);
-      Serial.printf("MQTT: cl%d no data (avail=%d tcp=%d)\n", idx,
-        tls->available(), tls->connected());
+      int av = tls->available();
+      int conn = tls->connected();
+      if (av > 0) {
+        uint8_t dump[64];
+        int n = tls->read(dump, sizeof(dump));
+        Serial.printf("MQTT: cl%d avail=%d tcp=%d rd=%d ", idx, av, conn, n);
+        for (int i = 0; i < n && i < 32; i++) Serial.printf("%02x ", dump[i]);
+        Serial.println();
+      } else {
+        Serial.printf("MQTT: cl%d no data (avail=%d tcp=%d)\n", idx, av, conn);
+      }
     }
 #endif
     return;

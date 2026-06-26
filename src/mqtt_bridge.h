@@ -9,6 +9,9 @@
 #endif
 #include <PubSubClient.h>
 #include "config.h"
+#ifdef ESP32
+#include "certgen.h"
+#endif
 
 struct MqttSub {
   String topic;
@@ -37,7 +40,7 @@ public:
   bool isConnected();
   MqttStatus getStatus();
 
-  // TLS certificate PEM (for web UI download — user imports into Bambu Studio)
+  // TLS certificate PEM (for web UI download)
   static const char *getTlsCert();
 
 private:
@@ -48,6 +51,13 @@ private:
   MqttClientCtx _clients[MAX_MQTT_CLIENTS];
   unsigned long _lastReconnect;
   GatewayConfig *_cfg;
+
+#ifdef ESP32
+  uint8_t _certDer[2048];
+  uint8_t _keyDer[2048];
+  size_t _certLen = 0;
+  size_t _keyLen = 0;
+#endif
 
   // upstream
   bool connectUpstream();

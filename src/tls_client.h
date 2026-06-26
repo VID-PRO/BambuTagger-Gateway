@@ -14,6 +14,8 @@ public:
   ~TlsWiFiClient();
 
   bool begin(WiFiClient *tcp, const char *certPem, const char *keyPem);
+  bool beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t certLen,
+                const uint8_t *keyDer, size_t keyLen);
   int continueHandshake();  // 1=done, 0=busy, -1=error
   bool isTls() { return _ok && _tcp; }
   bool handshakeDone() { return _hsDone; }

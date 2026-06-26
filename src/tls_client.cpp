@@ -47,6 +47,39 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   return true;
 }
 
+bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t certLen,
+                             const uint8_t *keyDer, size_t keyLen) {
+  _tcp = tcp;
+  _hsDone = false;
+  _ok = false;
+
+  int r;
+
+  r = mbedtls_ctr_drbg_seed(&_drbg, mbedtls_entropy_func, &_entropy, (const uint8_t *)TAG, strlen(TAG));
+  if (r != 0) { Serial.printf("TLS: drbg seed failed: -0x%x\n", -r); return false; }
+
+  r = mbedtls_x509_crt_parse(&_cert, certDer, certLen);
+  if (r != 0) { Serial.printf("TLS: cert parse failed: -0x%x\n", -r); return false; }
+
+  r = mbedtls_pk_parse_key(&_pkey, keyDer, keyLen, NULL, 0);
+  if (r != 0) { Serial.printf("TLS: key parse failed: -0x%x\n", -r); return false; }
+
+  // ... remainder identical to begin()
+  r = mbedtls_ssl_config_defaults(&_conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
+  if (r != 0) { Serial.printf("TLS: config defaults failed: -0x%x\n", -r); return false; }
+
+  mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
+  mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
+
+  r = mbedtls_ssl_setup(&_ssl, &_conf);
+  if (r != 0) { Serial.printf("TLS: ssl setup failed: -0x%x\n", -r); return false; }
+
+  mbedtls_ssl_set_bio(&_ssl, this, bio_send, bio_recv, NULL);
+
+  _ok = true;
+  return true;
+}
+
 int TlsWiFiClient::continueHandshake() {
   if (!_ok || _hsDone) return _hsDone ? 1 : -1;
   int r = mbedtls_ssl_handshake(&_ssl);

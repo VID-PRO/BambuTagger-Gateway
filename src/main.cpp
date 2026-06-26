@@ -35,7 +35,7 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
   IPAddress ipa = WiFi.localIP();
   char ip[16];
   snprintf(ip, sizeof(ip), "%d.%d.%d.%d", ipa[0], ipa[1], ipa[2], ipa[3]);
-  const char *serial = cfg->printerSerial;
+  const char *serial = cfg->gatewaySerial;
   if (isResponse) {
     snprintf(buf, len,
       "HTTP/1.1 200 OK\r\n"
