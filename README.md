@@ -1,6 +1,6 @@
 # BambuTagger-Gateway
 
-Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by multiplexing MQTT, camera, and FTPS traffic through a single ESP32-S3 / ESP8266 gateway.
+Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by multiplexing MQTT, camera, and FTPS traffic through a single ESP32-S3 gateway.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G8M220JASY)
 
@@ -59,18 +59,17 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 | Component | Notes | Buy |
 |---|---|---|
 | **ESP32-S3 board** | Seeed XIAO ESP32-S3 (standard, ≥8MB flash) | [Seeed Studio](https://www.seeedstudio.com/) |
-| *ESP8266 board (legacy)* | NodeMCU v3, Wemos D1 mini, or any ESP-12E module | [Aliexpress](https://www.aliexpress.com/) |
 | 5V power supply | USB-C (ESP32-S3) | — |
 
 ### Specifications
 
-| | ESP32-S3 | ESP8266 (legacy) |
-|---|---|---|
-| MCU | Xtensa LX7 dual-core (240 MHz) | Xtensa LX106 (80–160 MHz) |
-| RAM | 512 KB SRAM + 2 MB PSRAM | 80 KB (usable) |
-| Flash | 8 MB (QIO 80 MHz) | 4 MB (DOUT) |
-| WiFi | 802.11 b/g/n, AP + Station simultaneous | Same |
-| Status LED | GPIO21 (active low) | GPIO2/D4 (active low) |
+| | ESP32-S3 |
+|---|---|
+| MCU | Xtensa LX7 dual-core (240 MHz) |
+| RAM | 512 KB SRAM + 2 MB PSRAM |
+| Flash | 8 MB (QIO 80 MHz) |
+| WiFi | 802.11 b/g/n, AP + Station simultaneous |
+| Status LED | GPIO21 (active low) |
 
 ### LED Status Reference
 
@@ -92,8 +91,7 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 | `PubSubClient` | ^2.8 | Upstream MQTT connection to printer |
 | `ArduinoJson` | ^7.4 | JSON parsing |
 
-**ESP32-S3 built-in:** `WiFi`, `WebServer`, `ESPmDNS`, `HTTPClient`, `WiFiClientSecure`, `Update`, `ArduinoOTA`  
-**ESP8266 built-in:** `ESP8266WiFi`, `ESP8266WebServer`, `ESP8266mDNS`, `ESP8266HTTPClient`, `Updater`, `ArduinoOTA`
+**ESP32-S3 built-in:** `WiFi`, `WebServer`, `ESPmDNS`, `HTTPClient`, `WiFiClientSecure`, `Update`, `ArduinoOTA`
 
 ### Building
 
@@ -101,17 +99,11 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 # Install PlatformIO (if not already)
 pip install platformio
 
-# Build for ESP32-S3 (recommended)
+# Build for ESP32-S3
 pio run -e esp32-s3
 
 # Flash ESP32-S3
 pio run -e esp32-s3 -t upload --upload-port /dev/ttyACM0
-
-# Build for ESP8266 (legacy)
-pio run -e esp12e
-
-# Flash ESP8266
-pio run -e esp12e -t upload
 
 # Monitor
 pio device monitor -b 115200
@@ -119,13 +111,13 @@ pio device monitor -b 115200
 
 ### Board Settings (platformio.ini)
 
-| Setting | ESP32-S3 | ESP8266 (legacy) |
-|---|---|---|
-| Board | `seeed_xiao_esp32s3` | `esp12e` |
-| Flash Mode | `qio` | `dout` |
-| Framework | Arduino | Arduino |
-| Monitor Speed | 115200 | 115200 |
-| USB CDC | `true` (native USB) | — |
+| Setting | ESP32-S3 |
+|---|---|
+| Board | `seeed_xiao_esp32s3` |
+| Flash Mode | `qio` |
+| Framework | Arduino |
+| Monitor Speed | 115200 |
+| USB CDC | `true` (native USB) |
 
 ---
 
@@ -252,7 +244,7 @@ The MQTT bridge is the core component. It:
 - **FTPS**: The TCP proxy forwards raw TCP bytes only. FTPS (FTP over TLS) requires TLS termination which is not implemented. For file operations, use the printer's MQTT API instead.
 - **Camera**: The proxy assumes a plain TCP stream (e.g., MJPEG). If your printer uses a different protocol, adjust accordingly.
 - **Security**: Local MQTT on port 1883 is plain TCP (no TLS). Bambu Studio connects via TLS on port 8883 with a self-signed certificate. ESP32-S3 lacks `BearSSL::WiFiServerSecure`, so port 8883 also uses plain TCP — Bambu Studio will reject it without installing the self-signed CA cert from the `/cert` page (import into slicer's bundled CA store). The gateway is designed for isolated/trusted networks.
-- **mDNS resolution**: ESP32-S3's `WiFi.hostByName()` does not resolve `.local` mDNS names (unlike ESP8266). The gateway uses `MDNS.queryHost()` after station WiFi connects — resolution takes ~3 seconds per attempt.
+- **mDNS resolution**: ESP32-S3's `WiFi.hostByName()` does not resolve `.local` mDNS names. The gateway uses `MDNS.queryHost()` after station WiFi connects — resolution takes ~3 seconds per attempt.
 
 ---
 
