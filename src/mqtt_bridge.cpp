@@ -1,6 +1,7 @@
 #include "mqtt_bridge.h"
 #ifdef ESP32
 #include <ESPmDNS.h>
+#include "tls_client.h"
 #endif
 
 static char reportTopic[64];
@@ -73,6 +74,7 @@ MqttBridge::MqttBridge()
     _lastReconnect(0), _cfg(nullptr) {
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     _clients[i].active = false;
+    _clients[i].isTls = false;
     _clients[i].client = nullptr;
     _clients[i].subCount = 0;
     _clients[i].lastPid = 0;
@@ -89,6 +91,16 @@ MqttBridge::MqttBridge()
   _pubsub.setCallback([this](char *t, uint8_t *p, unsigned int l) {
     onUpstreamMessage(t, p, l);
   });
+}
+
+void MqttBridge::rebind() {
+  _localServer.close();
+  _localServer.begin();
+  _localServer.setNoDelay(true);
+  _tlsServer.close();
+  _tlsServer.begin();
+  _tlsServer.setNoDelay(true);
+  Serial.println("MQTT: servers rebound");
 }
 
 void MqttBridge::begin(GatewayConfig *cfg) {
@@ -138,12 +150,32 @@ void MqttBridge::loop() {
 
   while (acceptClient() >= 0) {}
 
+  static unsigned long lastDiag = 0;
+  unsigned long now = millis();
+  int active = 0;
+  for (int i = 0; i < MAX_MQTT_CLIENTS; i++) if (_clients[i].active) active++;
+  if (active > 0 && now - lastDiag > 10000) {
+    lastDiag = now;
+    Serial.printf("MQTT: %d active client(s)\n", active);
+  }
+
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) continue;
     if (!_clients[i].client->connected()) {
       disconnectClient(i);
       continue;
     }
+#ifdef ESP32
+    // Continue pending TLS handshake
+    if (_clients[i].isTls) {
+      TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(_clients[i].client);
+      if (!tls->handshakeDone()) {
+        int hs = tls->continueHandshake();
+        if (hs < 0) { disconnectClient(i); continue; }
+        if (hs == 0) continue; // handshake still busy
+      }
+    }
+#endif
     if (_clients[i].client->available()) {
       handleClient(i);
     }
@@ -265,17 +297,38 @@ void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int l
 // downstream client management
 // ------------------------------------------------------------------
 int MqttBridge::acceptClient() {
+  bool isTls = false;
   WiFiClient *c = nullptr;
 
-  // Check plain TCP server (port 1883)
-  WiFiClient plain = _localServer.accept();
-  if (plain) {
-    c = new WiFiClient(plain);
-  } else {
-    // Check port 8883 (also plain TCP — Devseclink=lan, no TLS)
-    WiFiClient tls = _tlsServer.accept();
-    if (tls) {
-      c = new WiFiClient(tls);
+  // Check TLS server (port 8883) — Bambu Studio connects here with TLS
+  WiFiClient raw = _tlsServer.accept();
+  if (raw) {
+    WiFiClient *rawPtr = new WiFiClient(raw);
+    TlsWiFiClient *tls = new TlsWiFiClient();
+    if (tls->begin(rawPtr, tls_cert, tls_key)) {
+      // Start non-blocking TLS handshake; may return 0 (WANT_READ/WANT_WRITE)
+      int hs = tls->continueHandshake();
+      if (hs < 0) {
+        Serial.printf("MQTT: TLS handshake failed\n");
+        delete tls;
+        return -1;
+      }
+      c = tls;
+      isTls = true;
+      Serial.printf("MQTT: TLS client from %s (hs=%d)\n", rawPtr->remoteIP().toString().c_str(), hs);
+    } else {
+      delete tls;
+      delete rawPtr;
+      return -1;
+    }
+  }
+
+  if (!c) {
+    // Check plain TCP server (port 1883) — for local tools/testing
+    WiFiClient plain = _localServer.accept();
+    if (plain) {
+      c = new WiFiClient(plain);
+      Serial.printf("MQTT: plain client from %s\n", c->remoteIP().toString().c_str());
     }
   }
 
@@ -289,6 +342,7 @@ int MqttBridge::acceptClient() {
     if (!_clients[i].active) {
       _clients[i].client = c;
       _clients[i].active = true;
+      _clients[i].isTls = isTls;
       _clients[i].subCount = 0;
       _clients[i].lastPid = 0;
       _clients[i].lastActivity = millis();
@@ -309,6 +363,7 @@ void MqttBridge::disconnectClient(int idx) {
     _clients[idx].client = nullptr;
   }
   _clients[idx].active = false;
+  _clients[idx].isTls = false;
 }
 
 // ------------------------------------------------------------------
@@ -321,6 +376,20 @@ void MqttBridge::handleClient(int idx) {
   uint8_t header;
   if (!readByte(c, header)) return;
   cl.lastActivity = millis();
+
+  // Log first bytes once per client
+  static bool logged[8] = {};
+  if (idx >= 0 && idx < 8 && !logged[idx]) {
+    logged[idx] = true;
+    Serial.printf("MQTT: first byte 0x%02x from client %d\n", header, idx);
+    if (header == 0x10) {
+      Serial.println("MQTT: => plain MQTT CONNECT");
+    } else if (header == 0x16 || header == 0x17) {
+      Serial.println("MQTT: => TLS handshake (TLS not supported on this port)");
+    } else {
+      Serial.printf("MQTT: => unknown protocol (type=%d)\n", (header >> 4) & 0x0F);
+    }
+  }
 
   uint8_t type = (header >> 4) & 0x0F;
   uint32_t remaining = 0;

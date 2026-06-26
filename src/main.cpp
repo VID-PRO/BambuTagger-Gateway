@@ -35,46 +35,47 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
   IPAddress ipa = WiFi.localIP();
   char ip[16];
   snprintf(ip, sizeof(ip), "%d.%d.%d.%d", ipa[0], ipa[1], ipa[2], ipa[3]);
+  const char *serial = cfg->printerSerial;
   if (isResponse) {
     snprintf(buf, len,
       "HTTP/1.1 200 OK\r\n"
       "Server: UPnP/1.0\r\n"
-       "Location: http://%s:2021/\r\n"
+       "Location: %s\r\n"
        "ST: urn:bambulab-com:device:3dprinter:1\r\n"
-       "USN: %s\r\n"
+       "USN: uuid:%s::urn:bambulab-com:device:3dprinter:1\r\n"
       "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
       "DevName.bambu.com: %s\r\n"
       "DevSignal.bambu.com: -44\r\n"
       "DevConnect.bambu.com: lan\r\n"
       "DevBind.bambu.com: free\r\n"
-       "Devseclink.bambu.com: lan\r\n"
+       "Devseclink.bambu.com: secure\r\n"
        "DevInf.bambu.com: eth0\r\n"
        "DevVersion.bambu.com: 01.07.00.00\r\n"
        "DevCap.bambu.com: 1\r\n"
        "\r\n",
-       ip, cfg->gatewaySerial, cfg->printerModel, _displayName);
+       ip, serial, cfg->printerModel, _displayName);
     } else {
       snprintf(buf, len,
         "NOTIFY * HTTP/1.1\r\n"
         "Host: 239.255.255.250:2021\r\n"
        "Server: UPnP/1.0\r\n"
-        "Location: http://%s:2021/\r\n"
+        "Location: %s\r\n"
         "NT: urn:bambulab-com:device:3dprinter:1\r\n"
         "NTS: ssdp:alive\r\n"
-        "USN: %s\r\n"
+        "USN: uuid:%s::urn:bambulab-com:device:3dprinter:1\r\n"
        "Cache-Control: max-age=1800\r\n"
        "DevModel.bambu.com: %s\r\n"
        "DevName.bambu.com: %s\r\n"
        "DevSignal.bambu.com: -44\r\n"
        "DevConnect.bambu.com: lan\r\n"
        "DevBind.bambu.com: free\r\n"
-        "Devseclink.bambu.com: lan\r\n"
+        "Devseclink.bambu.com: secure\r\n"
         "DevInf.bambu.com: eth0\r\n"
         "DevVersion.bambu.com: 01.07.00.00\r\n"
         "DevCap.bambu.com: 1\r\n"
         "\r\n",
-        ip, cfg->gatewaySerial, cfg->printerModel, _displayName);
+        ip, serial, cfg->printerModel, _displayName);
   }
 }
 
@@ -265,6 +266,23 @@ static void startStationServices(GatewayConfig *cfg) {
     WiFi.localIP().toString().c_str(), ESP.getFreeHeap());
 
   delay(500);
+  // Rebind MQTT servers after WiFi mode switch (AP → STA) ensures listeners
+  // are bound to the active station interface.
+  mqtt.rebind();
+
+  // Verify the MQTT server is listening on the station IP
+  delay(100);
+  WiFiClient selfTest;
+  IPAddress local = WiFi.localIP();
+  if (selfTest.connect(local, MQTT_PRINTER_PORT)) {
+    Serial.printf("MQTT: self-test OK — connected to %s:%d\n",
+      local.toString().c_str(), MQTT_PRINTER_PORT);
+    selfTest.stop();
+  } else {
+    Serial.printf("MQTT: WARNING self-test FAILED — %s:%d unreachable\n",
+      local.toString().c_str(), MQTT_PRINTER_PORT);
+  }
+
   startSSDP(cfg);
 
   Serial.printf("After SSDP — heap: %u\n", ESP.getFreeHeap());

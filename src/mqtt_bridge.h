@@ -22,6 +22,7 @@ struct MqttClientCtx {
   uint8_t subCount;
   uint16_t lastPid;
   bool active;
+  bool isTls;        // client is TlsWiFiClient with pending/ongoing TLS
   unsigned long lastActivity;
 };
 
@@ -31,6 +32,7 @@ class MqttBridge {
 public:
   MqttBridge();
   void begin(GatewayConfig *cfg);
+  void rebind();
   void loop();
   bool isConnected();
   MqttStatus getStatus();
