@@ -8,56 +8,62 @@ static char localRequestTopic[64];
 // Self-signed cert + key for local TLS MQTT broker (port 8883).
 // Bambu Studio requires TLS on port 8883 to connect to a printer.
 // CN=BambuTagger-Gateway, O=BBL Technologies Co., Ltd, C=CN
+// v3 with keyUsage=digitalSignature,keyEncipherment,keyCertSign; extendedKeyUsage=serverAuth
 static const char tls_cert[] PROGMEM = R"KEY(
 -----BEGIN CERTIFICATE-----
-MIIDHDCCAgQCCQCSPYnNTygjjjANBgkqhkiG9w0BAQsFADBPMRwwGgYDVQQDDBNC
-YW1idVRhZ2dlci1HYXRld2F5MSIwIAYDVQQKDBlCQkwgVGVjaG5vbG9naWVzIENv
-LiwgTHRkMQswCQYDVQQGEwJDTjAgFw0yNjA2MjUyMzEzMzNaGA8yMTI2MDYwMTIz
-MTMzM1owTzEcMBoGA1UEAwwTQmFtYnVUYWdnZXItR2F0ZXdheTEiMCAGA1UECgwZ
-QkJMIFRlY2hub2xvZ2llcyBDby4sIEx0ZDELMAkGA1UEBhMCQ04wggEiMA0GCSqG
-SIb3DQEBAQUAA4IBDwAwggEKAoIBAQDt+k3w/I1iWZlsxpVP14bR9Obcp8kZnsi6
-UoB5NQyerqo2IZWvqY7nWtLoJhd0xJnZJ4qBE62zLg5e6ohSCvnIFBIsMZOz68oV
-U0PtxMu7QNm910NnGq8GNyMw9Pitds0krd7onqC+9y6izG1LBiWxwF4XWszLWhna
-ZGrrfQQ4g2vLq4F7vcgR09pWWo24fDK1acfxdp6Ty9YsU4IN4qyXWf3dQKLhKobv
-hMKRD0dE1DHMmR9wpXOddbt9qqeifsiBO89WgXrjzG1EG6Do9RawUonmddfYW0Zb
-9i+qlnvALANtZsW9yThcA4RkWvnxmQ3a3ksnl2YWIjQ84jgGpmUPAgMBAAEwDQYJ
-KoZIhvcNAQELBQADggEBACyBkE6dPWRF2wosO5TcCSnAEGaN6GpirpGPoVXzuV2c
-qFVsTBaTHe+Q7IzVpwpuU5zai4JD0xqPgaUMW51hmSNvsRD7sT+ITHwOT5pxDaP5
-+8cNYmpSdtmsb3M9UPHdERY0Fjk5Ou8W8o+UEYY7Uw64MI/02RW5ZGQ5LdoUjFIf
-NEu9fcq7jTtNcv6ny0N8+KYPCPquylsXgwmcGn5rRFwz/n/rppjkkr++7w28eQc8
-OXyzBGcku6lelspXofoNAAGBs/CUDQr9GioepLbTNilF3ohVyOzyecZIB/EOTPng
-esz4VbvkltwfJfZNMaN6ZEmR3INAy7G9TYXdfZRCSMg=
+MIID/TCCAuWgAwIBAgIJAI1cw5dxX/X+MA0GCSqGSIb3DQEBCwUAME8xHDAaBgNV
+BAMME0JhbWJ1VGFnZ2VyLUdhdGV3YXkxIjAgBgNVBAoMGUJCTCBUZWNobm9sb2dp
+ZXMgQ28uLCBMdGQxCzAJBgNVBAYTAkNOMCAXDTI2MDYyNTIzNTMzM1oYDzIxMjYw
+NjAxMjM1MzMzWjBPMRwwGgYDVQQDDBNCYW1idVRhZ2dlci1HYXRld2F5MSIwIAYD
+VQQKDBlCQkwgVGVjaG5vbG9naWVzIENvLiwgTHRkMQswCQYDVQQGEwJDTjCCASIw
+DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMYmKeA0FL97aQnhtcSjau40pTK/
+OJOF8aCJXhlMguVIQngsQS6bHOgZlfhrOD288kTHgxfrAcXEWifwjlQ1OqzVApyO
+5K3t7G5hv8kmIhi34ymRYuy7QaD7iWwllupP4Epj8RkuwOl4BUas9sIo8E8kzpYE
+1w10s6nwwkePBSuC7LIVcsPBCOFowgpxI0HYEd+eTx7DstlW4kw2zSqSWk8DAOzh
+ICSRn1KaheeNrtMwMBusBdgIhnzjSJluQjhoYSadfDgKHtEKy/qxr5f0V/JfKIVG
+x9u4mRTP2JtU5CJVvfiPl/Tosk4zU+FOUpELudQZ0ci0iFY/4z1s+SIG+8ECAwEA
+AaOB2TCB1jAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwICpDATBgNVHSUE
+DDAKBggrBgEFBQcDATAdBgNVHQ4EFgQUz0/03xvJMUkx66EeOfudkD5hwR8wfwYD
+VR0jBHgwdoAUz0/03xvJMUkx66EeOfudkD5hwR+hU6RRME8xHDAaBgNVBAMME0Jh
+bWJ1VGFnZ2VyLUdhdGV3YXkxIjAgBgNVBAoMGUJCTCBUZWNobm9sb2dpZXMgQ28u
+LCBMdGQxCzAJBgNVBAYTAkNOggkAjVzDl3Ff9f4wDQYJKoZIhvcNAQELBQADggEB
+AMIAZT7MHfMB8iJAoLW1GkZEO4PW+boVajpZggDAKU9CRmg22BvDBeJspl3oKGVi
+w1bxNsPBAb+NptK+aDrnmN0w+G1dJgWVEp81iOp929EH4az6P9AQnMsGDWOjaD18
+SCviuNLzk/nzMue+mQ+NINZAYXJNfc3CJbaIvJcmFVK04fD0tDhLn80y7RX3TPSH
+l4Du5XBUv5cdxDEy0fBe2ZYC5mV/sOKBWFO2qnKnC2Dn0P8hCfJM9KhGsKcTftDu
+Z3W7/cOpYBv+Yc1lUDhBfdMLlhI3eWUNANg8LjPRWO27yYiFNE6Oo+ErwCro81iy
+owe+zlAvYyFvO5lvhbA8EOo=
 -----END CERTIFICATE-----
 )KEY";
 
 static const char tls_key[] PROGMEM = R"KEY(
 -----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDt+k3w/I1iWZls
-xpVP14bR9Obcp8kZnsi6UoB5NQyerqo2IZWvqY7nWtLoJhd0xJnZJ4qBE62zLg5e
-6ohSCvnIFBIsMZOz68oVU0PtxMu7QNm910NnGq8GNyMw9Pitds0krd7onqC+9y6i
-zG1LBiWxwF4XWszLWhnaZGrrfQQ4g2vLq4F7vcgR09pWWo24fDK1acfxdp6Ty9Ys
-U4IN4qyXWf3dQKLhKobvhMKRD0dE1DHMmR9wpXOddbt9qqeifsiBO89WgXrjzG1E
-G6Do9RawUonmddfYW0Zb9i+qlnvALANtZsW9yThcA4RkWvnxmQ3a3ksnl2YWIjQ8
-4jgGpmUPAgMBAAECggEAQ+DCPHt8xFG0Lk+SJRzfiqFk/AkrlhAxRtvjYy8bc2N0
-j04TCPC/HwRL5gV/aUHuc/8QRXLcd6AqXy5cRbJ1vnjjGhHmBEq78Es4s+gPCFEe
-CkUNJ6p3w7kUY5FsIOYi61RgoU8loHKWrb7LabvOIp4w+E5g3ZvMhftgd9zHyGo/
-FV8LK27AalDTNV/ZGaan61+NaoLOd31D/UwCtPtyjyrEvOVmzEoBPjAlsInJ67rv
-AhnPt+HkGKvxFkx1d4WshqO13Y5uwOgpEMPmUrWSwYZxe7Te0HSImOMKSQzWqReD
-V3qrhhplLHQy/4QJ3vfmjN6bS/ulhPH3PyXgU1vIgQKBgQD4MtjEOuOuhcZQAVoN
-Hxyohzf39fgAgMn7PglWhltGHuJQaRItjE5eYltYKPVJUzO9pDeMcr77TtASBORF
-ZYsyrhBOu0RlxfzAiP5OewkPEF9/RK6UM4qNFvltudmb2EfZsGNbF6+H2F2xI9fI
-HMxesifLn0aoiRi2cZR16mF/zwKBgQD1dTbsmp+f1sh0rXT8N3wkB3/1c3IdQV5N
-qNexmm0EL+S0WNSqJL0TxgSXcKQA6JcQBQlzFjNTjlCCj6NXbtqh4sdpouPXgwgq
-tkDYdCQTsE/oL+LdvDAYQIOYig0eDfX86jFgegDwXLw5VpMW1p/FdSRwZ7jevUqf
-PFceflLWwQKBgHd2Qc9xaNU/nkwz2lwmdWzIaK/4u/3B/3XmTihPUu9VPijl6dHy
-jmXvgXfVfvpkCatltzbqo/Hh5VRG9nhQf8dM8Jx0ll9GBHnHdl/f6GRPxSdEr6K1
-jCKMxFGD+rGAUFT/CVN2+w2vnqj8T4gKFHQf2/euGhxUoIhv8r0uqu8RAoGALqnA
-7kwa6n0fkKblJYm6zPKsDdKLsCocLnFZyAbOkMw2E18L1uizFU5A0zVzyERva3k5
-qapfyZO1lIyQBfAqGjqNpHR2EiNz6wLI4x15OlD7b+2imHrNPd8N5XLhOYR37kPr
-bSbkhM1sbw4ZWm8k4pn5enENgTLFO+5xtXdYckECgYB0KtAryKxyHLjoMVYDG4OL
-1VwRD8SDctGbKAXTAdFIXDTNJLF02cnuy+6Ia19XASSUny0ufgKvIH5GZFH2bG+3
-k9DT283LYghp/HB/miXqHh3LsnmeN4OPoVkt6QbekusrmTU7aywXW58R55V0FipG
-PUf6IGSISe42klHcnBnuLg==
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDGJingNBS/e2kJ
+4bXEo2ruNKUyvziThfGgiV4ZTILlSEJ4LEEumxzoGZX4azg9vPJEx4MX6wHFxFon
+8I5UNTqs1QKcjuSt7exuYb/JJiIYt+MpkWLsu0Gg+4lsJZbqT+BKY/EZLsDpeAVG
+rPbCKPBPJM6WBNcNdLOp8MJHjwUrguyyFXLDwQjhaMIKcSNB2BHfnk8ew7LZVuJM
+Ns0qklpPAwDs4SAkkZ9SmoXnja7TMDAbrAXYCIZ840iZbkI4aGEmnXw4Ch7RCsv6
+sa+X9FfyXyiFRsfbuJkUz9ibVOQiVb34j5f06LJOM1PhTlKRC7nUGdHItIhWP+M9
+bPkiBvvBAgMBAAECggEAO3TeIeFezGoqhYWNtjhW8K0pWMXaIyIQ89vkOXEk4cnB
+8C9PS73NebObtZPup0/X3l2Db5zbxkz5xHxBKPFj7tJn2zRhV/NJe4GnO6NOnd4n
+sqRma6Rwt+5iOOo6k4puQcQlZyoJRsT1yFREItSH7yebOZawNOBsvLR6h2BZ68jx
+Hcax4Cpz7Fl3x+wgPIyF9CoFZt7sXpVjTzC4pgp9JC5EF0d+kLrZMP1ODTydlmtH
+XZiy//JGoL9WLL3aBIJT5IRvZajrrvFri35IevZh++mWcMT9zqfffdXrZxoBQeV0
+wbJMl/MDB+n9FLKKu7JWzDZlU6dULB/6d74sHsj+xQKBgQDprWjgJItF6VrOpqWw
+k6m715W2O0rM2flBx1Typ+IuhOl2TGgGeKDHxN/0afmPe/1dUAGvRfVe+rNuJNEq
+e4t/eSqv3xKRVqow3/dtDOaPFFj0xAm1rxSTTQNKRv9csE2Wzbw3KCK1IF/y5atL
+1bw9LDbVpGDNJrGEQ8H1sFA0HwKBgQDZE+hegzDdm0G4yl17f3MGmWtlmU3e4hC0
+aoiGmWcjLQFxCg4KtgLpfp8S211vlVyJO3ACcIYR+fQWpmTy8awtAIMpvOBc73yF
+84GlD4Op7rtiANom/q2aGVNk093cywboZGq1jqSzu2w8pAETfHwD5/wq95n97GTf
+74tu9fnUHwKBgHA8wGDYbKS5vsn/NRoo8p+sntYWiIj4MUas7VpX1MWvRUtyy4xA
+KEmLgF4vAJUwYrONGCINohtqowBGYsja6lfh5OTwakSwsbIkAP258ovKpCd8eYVw
+gJt3pBrrGwB0FfBXBQ4hEvqYgD10nuAf2vgu4m+fMneXHDCBMwpFE2DVAoGAVZYa
+xMC20Hi5JdFroBh00oJErK8P27OH4IosP91Vo7HH4riTJrfyV/sbXsTshuT9sgGk
+POH+ijHhgdii7oJIXwnXrOoSD7JAh1Olpt2CDMraSF6LpFo/OgWIMrWxwK6vj4qf
+4+tUlqRrnVEQN42aG7QoYQx0Q4AjmYMJl3sVwAMCgYEAh5e0wacJgrPrnW+uNWKw
+WxOt96UbeAgRxTH5VDeld0WD+PvsEA53fZDo23tGn9kcQRlC8o6Oihc0JmMizW6D
+iej768hVc0sC89dEkYs2hYhd5W65u+meLEh/mPzKpshHQWMlvRWFe981fd8UPqC+
+jdY9rChFu/pNLg811ar1550=
 -----END PRIVATE KEY-----
 )KEY";
 
@@ -314,19 +320,6 @@ void MqttBridge::handleClient(int idx) {
         remaining -= chunk;
       }
       sendConnAck(c, false, 0);
-
-      // Immediately send printer identity so Bambu Studio auto-detects
-      // serial and model without needing to subscribe first.
-      if (!_pubsub.connected() && _cfg) {
-        char connResp[384];
-        int n = snprintf(connResp, sizeof(connResp),
-          "{\"info\":{\"command\":\"get_version\",\"sequence_id\":\"0\","
-          "\"version\":\"" VERSION "\",\"module\":\"%s\",\"model\":\"%s\","
-          "\"serial\":\"%s\",\"online\":\"true\"}}",
-          _cfg->printerModel, _cfg->printerModel, _cfg->printerSerial);
-        String ct = String("device/") + _cfg->gatewaySerial + "/report";
-        sendPublish(c, ct, (uint8_t *)connResp, n, 0);
-      }
       break;
     }
 

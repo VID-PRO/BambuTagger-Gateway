@@ -135,6 +135,7 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
 <div class="card">
   <h2>Printer Settings</h2>
   <form method="post" action="/save">
+    <input type="hidden" name="form" value="printer">
     <label>Hostname / IP</label>
     <input name="printer_host" placeholder="e.g. 192.168.1.100 or bambu-printer.local" value="%%PRINTER_HOST%%">
     <p class="hint">Printer: Settings &#8594; Network &#8594; IP Address</p>
@@ -186,6 +187,7 @@ static const char _PAGE_WIFI2[] PROGMEM = R"html(
 <div class="card">
   <h2>WiFi Settings</h2>
   <form method="post" action="/save">
+    <input type="hidden" name="form" value="wifi">
     <label>SSID</label>
     <input name="sta_ssid" placeholder="Your WiFi name" value="%%STA_SSID%%">
     <p class="hint">Leave empty to use AP-only mode</p>
@@ -498,44 +500,31 @@ static bool isValidHost(const String &host) {
 }
 
 static void handleSave() {
+  String formType = _server.arg("form");
+
   // Printer settings
-  String host = _server.arg("printer_host");
-  String code = _server.arg("printer_code");
-  String serial = _server.arg("printer_serial");
-
-  if (host.length() > 0 && !isValidHost(host)) {
-    String err = FPSTR(_PAGE_SAVED);
-    err.replace("&#10003; Saved!", "&#10007; Invalid Host");
-    err.replace("<p>Settings stored. Rebooting&hellip;</p>",
-      "<p>The printer host &ldquo;" + host + "&rdquo; is not a valid IP address or hostname.</p>");
-    err.replace("<meta http-equiv=\"refresh\" content=\"3;url=/\">",
-      "<a href=\"/config/settings\" style=\"color:#58a6ff\">&larr; Back to Printer Settings</a>");
-    _server.send(200, "text/html; charset=utf-8", err);
-    return;
-  }
-
-  if (host.length() > 0) {
+  if (formType == "printer") {
+    String host = _server.arg("printer_host");
+    if (!isValidHost(host)) {
+      String err = FPSTR(_PAGE_SAVED);
+      err.replace("&#10003; Saved!", "&#10007; Invalid Host");
+      err.replace("<p>Settings stored. Rebooting&hellip;</p>",
+        "<p>The printer host &ldquo;" + host + "&rdquo; is not a valid IP address or hostname.</p>");
+      err.replace("<meta http-equiv=\"refresh\" content=\"3;url=/\">",
+        "<a href=\"/config/settings\" style=\"color:#58a6ff\">&larr; Back to Printer Settings</a>");
+      _server.send(200, "text/html; charset=utf-8", err);
+      return;
+    }
     strlcpy(_cfg.printerHost, host.c_str(), sizeof(_cfg.printerHost));
-  }
-  if (code.length() > 0) {
-    strlcpy(_cfg.printerCode, code.c_str(), sizeof(_cfg.printerCode));
-  }
-  if (serial.length() > 0) {
-    strlcpy(_cfg.printerSerial, serial.c_str(), sizeof(_cfg.printerSerial));
-  }
-  String model = _server.arg("printer_model");
-  if (model.length() > 0) {
-    strlcpy(_cfg.printerModel, model.c_str(), sizeof(_cfg.printerModel));
+    strlcpy(_cfg.printerCode, _server.arg("printer_code").c_str(), sizeof(_cfg.printerCode));
+    strlcpy(_cfg.printerSerial, _server.arg("printer_serial").c_str(), sizeof(_cfg.printerSerial));
+    strlcpy(_cfg.printerModel, _server.arg("printer_model").c_str(), sizeof(_cfg.printerModel));
   }
 
-  // WiFi settings (can come from same form or separate)
-  String ssid = _server.arg("sta_ssid");
-  if (_server.hasArg("sta_ssid")) {
-    strlcpy(_cfg.stationSsid, ssid.c_str(), sizeof(_cfg.stationSsid));
-  }
-  String pass = _server.arg("sta_pass");
-  if (_server.hasArg("sta_pass")) {
-    strlcpy(_cfg.stationPass, pass.c_str(), sizeof(_cfg.stationPass));
+  // WiFi settings
+  if (formType == "wifi") {
+    strlcpy(_cfg.stationSsid, _server.arg("sta_ssid").c_str(), sizeof(_cfg.stationSsid));
+    strlcpy(_cfg.stationPass, _server.arg("sta_pass").c_str(), sizeof(_cfg.stationPass));
   }
 
   configSave();
@@ -603,9 +592,9 @@ static const char _PAGE_CERT2[] PROGMEM = R"html(
     Bambu Studio and OrcaSlicer verify the TLS certificate against a
     bundled <code>printer.cer</code> file — they do <strong>not</strong>
     use the system certificate store. To trust this gateway, append the
-    downloaded cert to that file with a text editor:<br><br>
+    downloaded cert to that file:<br><br>
     <strong>macOS</strong>:<br>
-    <code style="font-size:11px">sudo nano /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer</code><br>
+    <code style="font-size:11px">sudo bash -c 'cat ~/Downloads/gateway-ca.pem &gt;&gt; /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer'</code><br>
     <small>(OrcaSlicer: <code style="font-size:11px">/Applications/OrcaSlicer.app/Contents/Resources/cert/printer.cer</code>)</small><br><br>
     <strong>Windows</strong>:<br>
     <code style="font-size:11px">Notepad as admin: C:\Program Files\Bambu Studio\resources\cert\printer.cer</code><br>
