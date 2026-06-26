@@ -227,7 +227,7 @@ The MQTT bridge is the core component. It:
 ## Troubleshooting
 
 | Symptom | Fix |
-|---|---|---|
+|---|---|
 | Gateway AP not visible | Check `GATEWAY_AP_SSID` is set; verify ESP powers on (serial monitor); ESP32-S3 may need a full WiFi reset (`WiFi.mode(WIFI_OFF)` then back to `WIFI_AP`) on some boards |
 | MQTT clients can't connect | Ensure clients connect to `192.168.4.1:1883` (plain) or `192.168.4.1:8883` (TLS for Bambu Studio); connect to the gateway, not the printer directly |
 | Upstream MQTT fails | Verify `PRINTER_HOST`, `PRINTER_ACCESS_CODE`, `PRINTER_SERIAL`; printer must be on same network |
