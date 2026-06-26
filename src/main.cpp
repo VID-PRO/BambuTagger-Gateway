@@ -295,13 +295,17 @@ void loop() {
   int sc = WiFi.softAPgetStationNum();
   int mo = WiFi.getMode();
   int ws = WiFi.status();
-  if ((sc != lastStaCount || mo != lastMode || ws != lastStatus || now - lastDbg > 2000) && now - lastDbg > 500) {
+  if ((sc != lastStaCount || mo != lastMode || ws != lastStatus || now - lastDbg > 5000) && now - lastDbg > 500) {
     lastStaCount = sc;
     lastMode = mo;
+    lastStatus = ws;
     lastDbg = now;
-    Serial.printf("mode=%d AP=%s sta=%d staCon=%d wl=%d heap=%u\n",
-      mo, (mo == 2 || mo == 3) ? WiFi.softAPIP().toString().c_str() : "-",
-      sc, WiFi.isConnected(), ws, ESP.getFreeHeap());
+    // Quiet once station is stably connected with AP off
+    if (mo != 1 || ws != 3) {
+      Serial.printf("mode=%d AP=%s sta=%d staCon=%d wl=%d heap=%u\n",
+        mo, (mo == 2 || mo == 3) ? WiFi.softAPIP().toString().c_str() : "-",
+        sc, WiFi.isConnected(), ws, ESP.getFreeHeap());
+    }
   }
 
   // Start station services (MDNS, OTA, SSDP) on first station connection
