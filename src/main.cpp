@@ -24,7 +24,9 @@ static unsigned long _lastNotify = 0;
 static const unsigned long NOTIFY_INTERVAL = 10000;
 
 static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bool isResponse) {
-  String ip = WiFi.localIP().toString();
+  IPAddress ipa = WiFi.localIP();
+  char ip[16];
+  snprintf(ip, sizeof(ip), "%d.%d.%d.%d", ipa[0], ipa[1], ipa[2], ipa[3]);
   if (isResponse) {
     snprintf(buf, len,
       "HTTP/1.1 200 OK\r\n"
@@ -43,7 +45,7 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
       "DevVersion.bambu.com: 01.07.00.00\r\n"
       "DevCap.bambu.com: 1\r\n"
       "\r\n",
-      ip.c_str(), cfg->gatewaySerial, cfg->printerModel);
+      ip, cfg->gatewaySerial, cfg->printerModel);
   } else {
     snprintf(buf, len,
       "NOTIFY * HTTP/1.1\r\n"
@@ -64,7 +66,7 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
       "DevVersion.bambu.com: 01.07.00.00\r\n"
       "DevCap.bambu.com: 1\r\n"
       "\r\n",
-      ip.c_str(), cfg->gatewaySerial, cfg->printerModel);
+      ip, cfg->gatewaySerial, cfg->printerModel);
   }
 }
 
@@ -77,7 +79,9 @@ static void sendSSDPNotify(const GatewayConfig *cfg) {
   _ssdpUdp.beginPacket(bcast, SSDP_PORT);
   _ssdpUdp.write((const uint8_t *)msg, strlen(msg));
   _ssdpUdp.endPacket();
-  Serial.printf("SSDP: NOTIFY %s (%s) on %s\n", cfg->gatewaySerial, cfg->printerModel, WiFi.localIP().toString().c_str());
+  IPAddress ipa = WiFi.localIP();
+  Serial.printf("SSDP: NOTIFY %s (%s) on %d.%d.%d.%d\n",
+    cfg->gatewaySerial, cfg->printerModel, ipa[0], ipa[1], ipa[2], ipa[3]);
 }
 
 // Start SSDP responder: bind UDP port 2021, join the SSDP multicast group,
@@ -105,7 +109,7 @@ static void startSSDP(const GatewayConfig *cfg) {
   Serial.printf("SSDP: listening on UDP port %d\n", SSDP_PORT);
 
   // Rapid initial NOTIFY bursts for quick discovery
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 2; i++) {
     sendSSDPNotify(cfg);
     delay(200);
   }
