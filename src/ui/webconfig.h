@@ -24,6 +24,7 @@ using WebServer = ESP8266WebServer;
 #define EEPROM_MAGIC 0x45
 
 extern MqttBridge mqtt;
+extern char _displayName[];
 
 static GatewayConfig _cfg;
 static WebServer _server(80);
@@ -98,6 +99,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
   <h2>Gateway Identity</h2>
   <div style="margin:12px 0">
     <div class="info-row"><span class="lbl">IP</span><span class="val">%%STA_IP%%</span></div>
+    <div class="info-row"><span class="lbl">Printer Name</span><span class="val">%%PRINTER_NAME%%</span></div>
     <div class="info-row"><span class="lbl">Serial</span><span class="val">%%GATEWAY_SERIAL%%</span></div>
     <div class="info-row"><span class="lbl">Model</span><span class="val">%%PRINTER_MODEL%%</span></div>
     <div class="info-row"><span class="lbl">TLS Cert</span><span class="val"><a href="/cert" style="color:#58a6ff;text-decoration:none">Import &rarr;</a></span></div>
@@ -346,6 +348,7 @@ static String buildRoot() {
   page.replace("%%PRINTER_HOST%%", _cfg.printerHost);
   page.replace("%%GATEWAY_SERIAL%%", _cfg.gatewaySerial);
   page.replace("%%PRINTER_MODEL%%", _cfg.printerModel);
+  page.replace("%%PRINTER_NAME%%", _displayName);
   {
     const char *mqttCls, *mqttLabel;
     switch (mqtt.getStatus()) {

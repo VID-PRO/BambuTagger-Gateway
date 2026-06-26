@@ -28,6 +28,7 @@ TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT
 static const uint16_t SSDP_PORT = 2021;
 static WiFiUDP _ssdpUdp;
 static bool _ssdpReady = false;
+char _displayName[32] = "BambuTagger-Gateway";
 
 static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bool isResponse) {
   IPAddress ipa = WiFi.localIP();
@@ -42,7 +43,7 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
        "USN: %s\r\n"
       "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
-      "DevName.bambu.com: BambuTagger-Gateway\r\n"
+      "DevName.bambu.com: %s\r\n"
       "DevSignal.bambu.com: -44\r\n"
       "DevConnect.bambu.com: lan\r\n"
       "DevBind.bambu.com: free\r\n"
@@ -51,29 +52,29 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
        "DevVersion.bambu.com: 01.07.00.00\r\n"
        "DevCap.bambu.com: 1\r\n"
        "\r\n",
-       ip, cfg->gatewaySerial, cfg->printerModel);
-   } else {
-     snprintf(buf, len,
-       "NOTIFY * HTTP/1.1\r\n"
-       "Host: 239.255.255.250:2021\r\n"
-      "Server: UPnP/1.0\r\n"
-       "Location: http://%s:2021/\r\n"
-       "NT: urn:bambulab-com:device:3dprinter:1\r\n"
-       "NTS: ssdp:alive\r\n"
-       "USN: %s\r\n"
-      "Cache-Control: max-age=1800\r\n"
-      "DevModel.bambu.com: %s\r\n"
-      "DevName.bambu.com: BambuTagger-Gateway\r\n"
-      "DevSignal.bambu.com: -44\r\n"
-      "DevConnect.bambu.com: lan\r\n"
-      "DevBind.bambu.com: free\r\n"
-       "Devseclink.bambu.com: lan\r\n"
-       "DevInf.bambu.com: eth0\r\n"
-       "DevVersion.bambu.com: 01.07.00.00\r\n"
-       "DevCap.bambu.com: 1\r\n"
-       "\r\n",
-       ip, cfg->gatewaySerial, cfg->printerModel);
- }
+       ip, cfg->gatewaySerial, cfg->printerModel, _displayName);
+    } else {
+      snprintf(buf, len,
+        "NOTIFY * HTTP/1.1\r\n"
+        "Host: 239.255.255.250:2021\r\n"
+       "Server: UPnP/1.0\r\n"
+        "Location: http://%s:2021/\r\n"
+        "NT: urn:bambulab-com:device:3dprinter:1\r\n"
+        "NTS: ssdp:alive\r\n"
+        "USN: %s\r\n"
+       "Cache-Control: max-age=1800\r\n"
+       "DevModel.bambu.com: %s\r\n"
+       "DevName.bambu.com: %s\r\n"
+       "DevSignal.bambu.com: -44\r\n"
+       "DevConnect.bambu.com: lan\r\n"
+       "DevBind.bambu.com: free\r\n"
+        "Devseclink.bambu.com: lan\r\n"
+        "DevInf.bambu.com: eth0\r\n"
+        "DevVersion.bambu.com: 01.07.00.00\r\n"
+        "DevCap.bambu.com: 1\r\n"
+        "\r\n",
+        ip, cfg->gatewaySerial, cfg->printerModel, _displayName);
+  }
 }
 
 // Start SSDP responder: bind UDP port 2021, join the SSDP multicast group,
@@ -261,14 +262,19 @@ static void startStationServices(GatewayConfig *cfg) {
   Serial.printf("After SSDP — heap: %u\n", ESP.getFreeHeap());
 
   char mdnsName[64];
-  strcpy(mdnsName, "BambuTagger-Gateway");
+  // Printer-like hostname: 3DP-<first 3 of gateway id>-<last 3 of gateway id>
+  size_t gwl = strlen(cfg->gatewaySerial);
+  snprintf(mdnsName, sizeof(mdnsName), "3DP-%.3s-%.3s",
+    cfg->gatewaySerial,
+    gwl >= 3 ? cfg->gatewaySerial + gwl - 3 : cfg->gatewaySerial);
+  strlcpy(_displayName, mdnsName, sizeof(_displayName));
   if (MDNS.begin(mdnsName)) {
-    MDNS.addService("mqtt", "tcp", MQTT_LOCAL_PORT);
-    MDNS.addService("http", "tcp", 80);
     MDNS.addService("bambu", "tcp", MQTT_PRINTER_PORT);
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"product", (const char *)cfg->printerModel);
     MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"serial", (const char *)cfg->printerSerial);
-    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"model", (const char *)cfg->printerModel);
-    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"version", (const char *)VERSION);
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"fw_version", (const char *)VERSION);
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"cloud", (const char *)"disable");
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"usb", (const char *)"no");
   }
 
   ArduinoOTA.setHostname(mdnsName);
