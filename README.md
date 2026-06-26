@@ -254,8 +254,3 @@ The MQTT bridge is the core component. It:
 - MQTT client: [PubSubClient](https://github.com/knolleary/pubsubclient)
 - PlatformIO: [https://platformio.org](https://platformio.org)
 
----
-
-## License
-
-MIT — free to use, modify, and share.

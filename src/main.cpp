@@ -141,20 +141,17 @@ static void loopSSDP(const GatewayConfig *cfg) {
   }
 }
 
-static void startAP(uint8_t mode = WIFI_AP) {
+static void startAP(uint8_t mode = WIFI_AP_STA) {
   WiFi.persistent(false);
-  Serial.println("Resetting WiFi…");
   WiFi.mode(WIFI_OFF);
-  delay(1500);
+  delay(500);
   WiFi.mode((WiFiMode_t)mode);
-  delay(300);
-  esp_wifi_set_ps(WIFI_PS_NONE);
   delay(100);
-  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
-                    IPAddress(255, 255, 255, 0));
-  delay(50);
-  if (WiFi.softAP("BambuTagger-Gateway", NULL, 6, 0, 4)) {
-    Serial.printf("AP started: ch6 IP %s\n", WiFi.softAPIP().toString().c_str());
+  WiFi.setSleep(false);
+  delay(100);
+  if (WiFi.softAP("BambuTagger-Gateway")) {
+    Serial.printf("AP started: %s IP %s\n", "BambuTagger-Gateway",
+      WiFi.softAPIP().toString().c_str());
   } else {
     Serial.println("AP FAILED to start");
   }
