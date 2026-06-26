@@ -1,6 +1,6 @@
 # BambuTagger-Gateway
 
-Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by multiplexing MQTT, camera, and FTPS traffic through a single ESP32-C3 / ESP8266 gateway.
+Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by multiplexing MQTT, camera, and FTPS traffic through a single ESP32-S3 / ESP8266 gateway.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G8M220JASY)
 
@@ -32,7 +32,7 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 ```
 ┌──────────-────┐     ┌──────────────────────┐     ┌─────────────────┐
 │ MQTT Client 1 │────▶│                      │────▶│                 │
-│ MQTT Client 2 │────▶│  ESP32-C3 Gateway    │────▶│  Bambu Lab      │
+│ MQTT Client 2 │────▶│  ESP32-S3 Gateway   │────▶│  Bambu Lab      │
 │ MQTT Client 3 │────▶│  ┌────────────────┐  │     │  Printer        │
 │      ...      │     │  │ MQTT Bridge    │──┼────▶│  ┌───────────┐  │
 │ MQTT Client 8 │     │  │ (1 upstream    │  │     │  │ MQTT 8883 │  │
