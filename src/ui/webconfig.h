@@ -1,12 +1,21 @@
 #pragma once
 
+#include <EEPROM.h>
+#include "config.h"
+
+#ifdef ESP32
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include <Update.h>
+#include <WiFiClientSecure.h>
+#else
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
-#include <EEPROM.h>
-#include <Updater.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClientSecure.h>
-#include "config.h"
+#include <Updater.h>
+using WebServer = ESP8266WebServer;
+#endif
 #include "mqtt_bridge.h"
 #include "logo_png.h"
 
@@ -17,7 +26,7 @@
 extern MqttBridge mqtt;
 
 static GatewayConfig _cfg;
-static ESP8266WebServer _server(80);
+static WebServer _server(80);
 static bool _webconfigActive = false;
 
 static const char _SITE_STYLE[] PROGMEM = R"(
@@ -289,7 +298,13 @@ static void configLoad() {
     strlcpy(_cfg.printerCode, PRINTER_CODE_DFLT, sizeof(_cfg.printerCode));
     strlcpy(_cfg.printerSerial, PRINTER_SERIAL_DFLT, sizeof(_cfg.printerSerial));
     char gwSerial[32];
-    snprintf(gwSerial, sizeof(gwSerial), "22E8BJ5B%07X", ESP.getChipId() & 0xFFFFFF);
+#if defined(ESP32)
+    uint64_t mac = ESP.getEfuseMac();
+    uint32_t chipId = (uint32_t)(mac >> 24);
+#else
+    uint32_t chipId = ESP.getChipId();
+#endif
+    snprintf(gwSerial, sizeof(gwSerial), "22E8BJ5B%07X", chipId & 0xFFFFFF);
     strlcpy(_cfg.gatewaySerial, gwSerial, sizeof(_cfg.gatewaySerial));
     strlcpy(_cfg.printerModel, PRINTER_MODEL_DFLT, sizeof(_cfg.printerModel));
     _cfg.stationSsid[0] = '\0';
@@ -340,7 +355,6 @@ static String buildRoot() {
     }
     page.replace("%%MQTT_STATUS%%", String("<span class=\"") + mqttCls + "\">" + mqttLabel + "</span>");
   }
-  // These will be updated from main if needed; we use placeholders
   unsigned long secs = millis() / 1000;
   char upt[32];
   snprintf(upt, sizeof(upt), "%dd %02d:%02d:%02d",
@@ -630,9 +644,11 @@ static void handleCert() {
 
 // ── Public API ─────────────────────────────────────────────────────────
 
-inline void webconfigBegin() {
+inline void webconfigInit() {
   configLoad();
+}
 
+inline void webconfigBegin() {
   _server.on("/", handleRoot);
   _server.on("/Logo/bambutagger.png", handleLogo);
   _server.on("/cert", handleCert);

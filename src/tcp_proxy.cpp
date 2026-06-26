@@ -1,4 +1,7 @@
 #include "tcp_proxy.h"
+#ifdef ESP32
+#include <ESPmDNS.h>
+#endif
 
 TcpProxy::TcpProxy(const char *name, uint16_t localPort, const char *remoteHost,
                    uint16_t remotePort, uint8_t maxClients)
@@ -18,6 +21,9 @@ void TcpProxy::begin() {
 }
 
 void TcpProxy::loop() {
+  // Don't attempt upstream connection without station WiFi (avoids DNS errors)
+  if (!WiFi.isConnected()) return;
+
   if (!_upstream.connected()) {
     unsigned long now = millis();
     if (!_disconnected) {
@@ -64,7 +70,25 @@ bool TcpProxy::connectUpstream() {
   if (_upstream.connected()) return true;
   _upstream.stop();
   _upstream.setTimeout(1000);
-  if (!_upstream.connect(_remoteHost, _remotePort)) return false;
+
+  const char *host = _remoteHost;
+  char resolved[64];
+#ifdef ESP32
+  size_t hl = strlen(host);
+  if (hl > 6 && strcmp(host + hl - 6, ".local") == 0 && WiFi.isConnected()) {
+    char name[64];
+    size_t nl = hl - 6;
+    memcpy(name, host, nl);
+    name[nl] = '\0';
+    IPAddress ip = MDNS.queryHost(name, 3000);
+    if (ip != IPAddress(0, 0, 0, 0)) {
+      snprintf(resolved, sizeof(resolved), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+      host = resolved;
+      Serial.printf("%s: resolved %s.local -> %s\n", _name, name, host);
+    }
+  }
+#endif
+  if (!_upstream.connect(host, _remotePort)) return false;
   _upstream.setNoDelay(true);
   return true;
 }

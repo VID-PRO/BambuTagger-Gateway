@@ -1,7 +1,12 @@
 #pragma once
 
+#ifdef ESP32
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#else
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
+#endif
 #include <PubSubClient.h>
 #include "config.h"
 
@@ -37,7 +42,7 @@ private:
   WiFiClientSecure *_upTcp = nullptr;
   PubSubClient _pubsub;
   WiFiServer _localServer;
-  BearSSL::WiFiServerSecure _tlsServer;
+  WiFiServer _tlsServer;
   MqttClientCtx _clients[MAX_MQTT_CLIENTS];
   unsigned long _lastReconnect;
   GatewayConfig *_cfg;

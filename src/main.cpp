@@ -1,8 +1,16 @@
+#ifdef ESP32
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#else
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#endif
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <lwip/igmp.h>
+#ifdef ESP32
+#include <esp_wifi.h>
+#endif
 
 #include "config.h"
 #include "ui/webconfig.h"
@@ -20,8 +28,6 @@ TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT
 static const uint16_t SSDP_PORT = 2021;
 static WiFiUDP _ssdpUdp;
 static bool _ssdpReady = false;
-static unsigned long _lastNotify = 0;
-static const unsigned long NOTIFY_INTERVAL = 10000;
 
 static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bool isResponse) {
   IPAddress ipa = WiFi.localIP();
@@ -31,61 +37,47 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
     snprintf(buf, len,
       "HTTP/1.1 200 OK\r\n"
       "Server: UPnP/1.0\r\n"
-      "Location: %s\r\n"
-      "ST: urn:bambulab-com:device:3dprinter:1\r\n"
-      "USN: %s\r\n"
+       "Location: http://%s:2021/\r\n"
+       "ST: urn:bambulab-com:device:3dprinter:1\r\n"
+       "USN: %s\r\n"
       "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
       "DevName.bambu.com: BambuTagger-Gateway\r\n"
       "DevSignal.bambu.com: -44\r\n"
       "DevConnect.bambu.com: lan\r\n"
       "DevBind.bambu.com: free\r\n"
-      "Devseclink.bambu.com: secure\r\n"
-      "DevInf.bambu.com: eth0\r\n"
-      "DevVersion.bambu.com: 01.07.00.00\r\n"
-      "DevCap.bambu.com: 1\r\n"
-      "\r\n",
-      ip, cfg->gatewaySerial, cfg->printerModel);
-  } else {
-    snprintf(buf, len,
-      "NOTIFY * HTTP/1.1\r\n"
-      "Host: 239.255.255.250:1990\r\n"
+       "Devseclink.bambu.com: lan\r\n"
+       "DevInf.bambu.com: eth0\r\n"
+       "DevVersion.bambu.com: 01.07.00.00\r\n"
+       "DevCap.bambu.com: 1\r\n"
+       "\r\n",
+       ip, cfg->gatewaySerial, cfg->printerModel);
+   } else {
+     snprintf(buf, len,
+       "NOTIFY * HTTP/1.1\r\n"
+       "Host: 239.255.255.250:2021\r\n"
       "Server: UPnP/1.0\r\n"
-      "Location: %s\r\n"
-      "NT: urn:bambulab-com:device:3dprinter:1\r\n"
-      "NTS: ssdp:alive\r\n"
-      "USN: %s\r\n"
+       "Location: http://%s:2021/\r\n"
+       "NT: urn:bambulab-com:device:3dprinter:1\r\n"
+       "NTS: ssdp:alive\r\n"
+       "USN: %s\r\n"
       "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
       "DevName.bambu.com: BambuTagger-Gateway\r\n"
       "DevSignal.bambu.com: -44\r\n"
       "DevConnect.bambu.com: lan\r\n"
       "DevBind.bambu.com: free\r\n"
-      "Devseclink.bambu.com: secure\r\n"
-      "DevInf.bambu.com: eth0\r\n"
-      "DevVersion.bambu.com: 01.07.00.00\r\n"
-      "DevCap.bambu.com: 1\r\n"
-      "\r\n",
-      ip, cfg->gatewaySerial, cfg->printerModel);
-  }
-}
-
-// Send SSDP NOTIFY alive announcement via broadcast.
-static void sendSSDPNotify(const GatewayConfig *cfg) {
-  if (!_ssdpReady) return;
-  char msg[512];
-  buildSsdpmessage(cfg, msg, sizeof(msg), false);
-  IPAddress bcast(255, 255, 255, 255);
-  _ssdpUdp.beginPacket(bcast, SSDP_PORT);
-  _ssdpUdp.write((const uint8_t *)msg, strlen(msg));
-  _ssdpUdp.endPacket();
-  IPAddress ipa = WiFi.localIP();
-  Serial.printf("SSDP: NOTIFY %s (%s) on %d.%d.%d.%d\n",
-    cfg->gatewaySerial, cfg->printerModel, ipa[0], ipa[1], ipa[2], ipa[3]);
+       "Devseclink.bambu.com: lan\r\n"
+       "DevInf.bambu.com: eth0\r\n"
+       "DevVersion.bambu.com: 01.07.00.00\r\n"
+       "DevCap.bambu.com: 1\r\n"
+       "\r\n",
+       ip, cfg->gatewaySerial, cfg->printerModel);
+ }
 }
 
 // Start SSDP responder: bind UDP port 2021, join the SSDP multicast group,
-// and send initial NOTIFY broadcasts for quick discovery.
+// and respond to M-SEARCH queries from Bambu Studio.
 static void startSSDP(const GatewayConfig *cfg) {
   if (_ssdpReady) return;
   IPAddress local = WiFi.localIP();
@@ -97,9 +89,13 @@ static void startSSDP(const GatewayConfig *cfg) {
   }
 
   // Join the SSDP multicast group (239.255.255.250) so we hear M-SEARCH queries
-  // from Bambu Studio.  This mirrors the approach used by the ESP8266SSDP library.
+  // from Bambu Studio.
   IPAddress mcast(239, 255, 255, 250);
-  if (igmp_joingroup(local, mcast) == ERR_OK) {
+  ip4_addr_t ifaddr;
+  ifaddr.addr = (uint32_t)local;
+  ip4_addr_t mcaddr;
+  mcaddr.addr = (uint32_t)mcast;
+  if (igmp_joingroup(&ifaddr, &mcaddr) == ERR_OK) {
     Serial.println("SSDP: joined multicast 239.255.255.250");
   } else {
     Serial.println("SSDP: WARNING multicast join failed — NOTIFY-only mode");
@@ -107,13 +103,6 @@ static void startSSDP(const GatewayConfig *cfg) {
 
   _ssdpReady = true;
   Serial.printf("SSDP: listening on UDP port %d\n", SSDP_PORT);
-
-  // Rapid initial NOTIFY bursts for quick discovery
-  for (int i = 0; i < 2; i++) {
-    sendSSDPNotify(cfg);
-    delay(200);
-  }
-  _lastNotify = millis();
 }
 
 static void stopSSDP() {
@@ -123,7 +112,7 @@ static void stopSSDP() {
   }
 }
 
-// Handle incoming SSDP messages (M-SEARCH) and send periodic NOTIFY broadcasts.
+// Handle incoming SSDP messages (M-SEARCH) and respond.
 static void loopSSDP(const GatewayConfig *cfg) {
   if (!_ssdpReady) return;
 
@@ -150,44 +139,45 @@ static void loopSSDP(const GatewayConfig *cfg) {
       }
     }
   }
-
-  // Send periodic NOTIFY broadcasts
-  unsigned long now = millis();
-  if (now - _lastNotify >= NOTIFY_INTERVAL) {
-    _lastNotify = now;
-    sendSSDPNotify(cfg);
-  }
 }
 
-static void startAP() {
-  WiFi.softAPConfig(GATEWAY_AP_IP, GATEWAY_AP_IP, GATEWAY_AP_SUBNET);
-  WiFi.softAP(GATEWAY_AP_SSID, GATEWAY_AP_PASS, GATEWAY_AP_CHANNEL);
-}
-
-static void setupWiFi(GatewayConfig *cfg) {
-  WiFi.mode(WIFI_AP_STA);
-  startAP();
-
-  if (strlen(cfg->stationSsid) > 0) {
-    WiFi.begin(cfg->stationSsid, cfg->stationPass);
+static void startAP(uint8_t mode = WIFI_AP) {
+  WiFi.persistent(false);
+  Serial.println("Resetting WiFi…");
+  WiFi.mode(WIFI_OFF);
+  delay(1500);
+  WiFi.mode((WiFiMode_t)mode);
+  delay(300);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  delay(100);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                    IPAddress(255, 255, 255, 0));
+  delay(50);
+  if (WiFi.softAP("BambuTagger-Gateway", NULL, 6, 0, 4)) {
+    Serial.printf("AP started: ch6 IP %s\n", WiFi.softAPIP().toString().c_str());
+  } else {
+    Serial.println("AP FAILED to start");
   }
+  Serial.printf("WiFi mode: %d\n", WiFi.getMode());
 }
 
 static void manageAP() {
   bool staConnected = WiFi.isConnected();
-  WiFiMode_t mode = WiFi.getMode();
+  auto mode = WiFi.getMode();
 
   if (staConnected && mode != WIFI_STA) {
     WiFi.mode(WIFI_STA);
-    Serial.print("Station connected — IP: ");
-    Serial.print(WiFi.localIP());
-    Serial.println("  AP stopped");
   } else if (!staConnected && mode != WIFI_AP_STA && strlen(webconfigGetConfig()->stationSsid) > 0) {
     WiFi.mode(WIFI_AP_STA);
     startAP();
     Serial.println("Station lost — AP restarted");
   }
 }
+
+// XIAO ESP32-S3: built-in LED on GPIO21, active LOW (LED_BUILTIN from variant).
+#ifndef LED_BUILTIN
+#define LED_BUILTIN 21
+#endif
 
 static void ledSetup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -220,16 +210,26 @@ static void ledLoop() {
 
 void setup() {
   Serial.begin(115200);
-  delay(500);
+  // ESP32-S3 native USB CDC needs time to enumerate before any output
+  delay(3000);
   Serial.println("\n\nBambuTagger Gateway " VERSION);
 
   ledSetup();
 
-  // load runtime config from EEPROM
-  webconfigBegin();
+  // Load config first (EEPROM only, no lwIP needed)
+  webconfigInit();
   GatewayConfig *cfg = webconfigGetConfig();
 
-  setupWiFi(cfg);
+  // Start WiFi in AP or AP+STA mode depending on whether station is configured.
+  if (strlen(cfg->stationSsid) > 0) {
+    startAP(WIFI_AP_STA);
+    WiFi.begin(cfg->stationSsid, cfg->stationPass);
+  } else {
+    startAP();
+  }
+
+  // Now start TCP servers (lwIP is initialized by WiFi in either mode)
+  webconfigBegin();
   delay(1000);
 
   // apply runtime config to all bridges
@@ -247,18 +247,32 @@ void setup() {
   camProxy.begin();
   ftpsProxy.begin();
 
+  Serial.printf("Gateway AP: %s\n", GATEWAY_AP_SSID);
+  Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+  Serial.printf("Free heap: %u\n", ESP.getFreeHeap());
+  Serial.println("Ready.");
+}
+
+static void startStationServices(GatewayConfig *cfg) {
+  Serial.printf("Station connected — IP: %s  AP stopped  heap: %u\n",
+    WiFi.localIP().toString().c_str(), ESP.getFreeHeap());
+
+  delay(500);
+  startSSDP(cfg);
+
+  Serial.printf("After SSDP — heap: %u\n", ESP.getFreeHeap());
+
   char mdnsName[64];
   strcpy(mdnsName, "BambuTagger-Gateway");
   if (MDNS.begin(mdnsName)) {
     MDNS.addService("mqtt", "tcp", MQTT_LOCAL_PORT);
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("bambu", "tcp", MQTT_PRINTER_PORT);
-    MDNS.addServiceTxt("bambu", "tcp", "serial", cfg->printerSerial);
-    MDNS.addServiceTxt("bambu", "tcp", "model", cfg->printerModel);
-    MDNS.addServiceTxt("bambu", "tcp", "version", VERSION);
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"serial", (const char *)cfg->printerSerial);
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"model", (const char *)cfg->printerModel);
+    MDNS.addServiceTxt((const char *)"bambu", (const char *)"tcp", (const char *)"version", (const char *)VERSION);
   }
 
-  // OTA update server
   ArduinoOTA.setHostname(mdnsName);
   ArduinoOTA.onStart([]() { Serial.println("OTA: start"); });
   ArduinoOTA.onEnd([]() { Serial.println("OTA: end"); });
@@ -267,41 +281,37 @@ void setup() {
   });
   ArduinoOTA.begin();
 
-  Serial.print("Gateway AP: ");
-  Serial.println(GATEWAY_AP_SSID);
-  Serial.print("AP IP: ");
-  Serial.println(WiFi.softAPIP());
-  if (WiFi.isConnected()) {
-    Serial.print("Station IP: ");
-    Serial.println(WiFi.localIP());
-    startSSDP(cfg);
-  }
-  Serial.println("Ready.");
+  Serial.printf("After MDNS+OTA — heap: %u\n", ESP.getFreeHeap());
 }
 
 void loop() {
   webconfigLoop();
   manageAP();
+
+  // Debug AP status every 10 seconds
+  static unsigned long lastApDbg = 0;
+  unsigned long now = millis();
+  if (now - lastApDbg > 10000) {
+    lastApDbg = now;
+    Serial.printf("AP: mode=%d IP=%s stations=%d\n",
+      WiFi.getMode(), WiFi.softAPIP().toString().c_str(),
+      WiFi.softAPgetStationNum());
+  }
+
+  // Start station services (MDNS, OTA, SSDP) on first station connection
+  // Must happen before bridge loops so MDNS is available for hostname resolution
+  GatewayConfig *cfg = webconfigGetConfig();
+  static bool staServicesStarted = false;
+  if (!staServicesStarted && WiFi.isConnected()) {
+    staServicesStarted = true;
+    startStationServices(cfg);
+  }
+
   mqtt.loop();
   camProxy.loop();
   ftpsProxy.loop();
   ArduinoOTA.handle();
-  MDNS.update();
   ledLoop();
-
-  GatewayConfig *cfg = webconfigGetConfig();
-
-  // Manage SSDP lifecycle: start on station connect, stop on disconnect.
-  // Small delay to let the WiFi stack settle after (re)connecting.
-  static bool wasStaUp = false;
-  bool staUp = WiFi.isConnected();
-  if (staUp && !wasStaUp) {
-    delay(500);
-    startSSDP(cfg);
-  } else if (!staUp && wasStaUp) {
-    stopSSDP();
-  }
-  wasStaUp = staUp;
 
   loopSSDP(cfg);
 }

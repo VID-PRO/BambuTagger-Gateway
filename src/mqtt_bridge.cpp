@@ -1,14 +1,15 @@
 #include "mqtt_bridge.h"
+#ifdef ESP32
+#include <ESPmDNS.h>
+#endif
 
 static char reportTopic[64];
 static char requestTopic[64];
 static char localReportTopic[64];
 static char localRequestTopic[64];
 
-// Self-signed cert + key for local TLS MQTT broker (port 8883).
-// Bambu Studio requires TLS on port 8883 to connect to a printer.
-// CN=BambuTagger-Gateway, O=BBL Technologies Co., Ltd, C=CN
-// v3 with keyUsage=digitalSignature,keyEncipherment,keyCertSign; extendedKeyUsage=serverAuth
+// Self-signed cert + key for local TLS (currently unused — ESP32-C3 uses plain WiFiServer).
+// Retained in PROGMEM for future mbedTLS-based TLS server and /cert download page.
 static const char tls_cert[] PROGMEM = R"KEY(
 -----BEGIN CERTIFICATE-----
 MIID/TCCAuWgAwIBAgIJAI1cw5dxX/X+MA0GCSqGSIb3DQEBCwUAME8xHDAaBgNV
@@ -102,13 +103,10 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   _localServer.begin();
   _localServer.setNoDelay(true);
 
-  // TLS server on 8883 — Bambu Studio requires TLS on this port
-  static BearSSL::X509List cert(tls_cert);
-  static BearSSL::PrivateKey key(tls_key);
-  _tlsServer.setRSACert(&cert, &key);
+  // Plain TCP server on 8883 (Bambu Studio connects here; TLS not used when Devseclink=lan)
   _tlsServer.begin();
   _tlsServer.setNoDelay(true);
-  Serial.println("TLS: server ready on port 8883");
+  Serial.println("MQTT: server ready on port 8883");
 }
 
 const char *MqttBridge::getTlsCert() {
@@ -176,7 +174,25 @@ bool MqttBridge::connectUpstream() {
   _upTcp = new WiFiClientSecure();
   _upTcp->setInsecure();
   _upTcp->setTimeout(10000);
-  if (!_upTcp->connect(_cfg->printerHost, MQTT_PRINTER_PORT)) {
+
+  const char *host = _cfg->printerHost;
+  char resolved[64];
+#ifdef ESP32
+  size_t hl = strlen(host);
+  if (hl > 6 && strcmp(host + hl - 6, ".local") == 0 && WiFi.isConnected()) {
+    char name[64];
+    size_t nl = hl - 6;
+    memcpy(name, host, nl);
+    name[nl] = '\0';
+    IPAddress ip = MDNS.queryHost(name, 3000);
+    if (ip != IPAddress(0, 0, 0, 0)) {
+      snprintf(resolved, sizeof(resolved), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+      host = resolved;
+      Serial.printf("mqtt: resolved %s.local -> %s\n", name, host);
+    }
+  }
+#endif
+  if (!_upTcp->connect(host, MQTT_PRINTER_PORT)) {
     delete _upTcp; _upTcp = nullptr;
     return false;
   }
@@ -257,10 +273,10 @@ int MqttBridge::acceptClient() {
   if (plain) {
     c = new WiFiClient(plain);
   } else {
-    // Check TLS server (port 8883) for Bambu Studio clients
-    WiFiClientSecure tls = _tlsServer.accept();
+    // Check port 8883 (also plain TCP — Devseclink=lan, no TLS)
+    WiFiClient tls = _tlsServer.accept();
     if (tls) {
-      c = new WiFiClientSecure(tls);
+      c = new WiFiClient(tls);
     }
   }
 
@@ -354,14 +370,11 @@ void MqttBridge::handleClient(int idx) {
       if (toRead > 0 && !readBytes(c, payload, toRead)) return;
 
       // Fake printer responses when no real printer is connected.
-      // Respond to any device/X/request topic so Bambu Studio
-      // auto-detects the printer regardless of which serial is used.
       if (!_pubsub.connected()) {
         int tlen = strlen(topic);
         static const char reqSuffix[] = "/request";
         static const int slen = sizeof(reqSuffix) - 1;
         if (tlen > slen && strcmp(topic + tlen - slen, reqSuffix) == 0) {
-          // Derive report topic from the request
           char respTopic[128];
           memcpy(respTopic, topic, tlen - slen);
           memcpy(respTopic + tlen - slen, "/report", 7);
@@ -396,30 +409,30 @@ void MqttBridge::handleClient(int idx) {
             sendPublish(c, respTopic, (uint8_t *)resp, rlen2, 0);
           }
 
-        if (strstr((const char *)payload, "\"pushall\"")) {
-          char resp[512];
-          const char *serial = _cfg ? _cfg->printerSerial : PRINTER_SERIAL_DFLT;
-          int rlen2 = snprintf(resp, sizeof(resp),
-            "{\"print\":{\"command\":\"pushall\",\"sequence_id\":\"0\","
-            "\"serial\":\"%s\","
-            "\"gcode_state\":\"IDLE\",\"subtask_name\":\"\",\"project_id\":\"\","
-            "\"gcode_file\":\"\",\"mc_percent\":0,\"mc_remaining_time\":0,"
-            "\"layer_num\":0,\"total_layer_num\":0,"
-            "\"nozzle_temper\":25.1,\"nozzle_target_temper\":0,"
-            "\"bed_temper\":25.2,\"bed_target_temper\":0,"
-            "\"chamber_temper\":25.0,\"spd_mag\":100,"
-            "\"wifi_signal\":\"-50dBm\",\"sdcard\":true}}",
-            serial);
-          sendPublish(c, respTopic, (uint8_t *)resp, rlen2, 0);
+          if (strstr((const char *)payload, "\"pushall\"")) {
+            char resp[512];
+            const char *serial = _cfg ? _cfg->printerSerial : PRINTER_SERIAL_DFLT;
+            int rlen2 = snprintf(resp, sizeof(resp),
+              "{\"print\":{\"command\":\"pushall\",\"sequence_id\":\"0\","
+              "\"serial\":\"%s\","
+              "\"gcode_state\":\"IDLE\",\"subtask_name\":\"\",\"project_id\":\"\","
+              "\"gcode_file\":\"\",\"mc_percent\":0,\"mc_remaining_time\":0,"
+              "\"layer_num\":0,\"total_layer_num\":0,"
+              "\"nozzle_temper\":25.1,\"nozzle_target_temper\":0,"
+              "\"bed_temper\":25.2,\"bed_target_temper\":0,"
+              "\"chamber_temper\":25.0,\"spd_mag\":100,"
+              "\"wifi_signal\":\"-50dBm\",\"sdcard\":true}}",
+              serial);
+            sendPublish(c, respTopic, (uint8_t *)resp, rlen2, 0);
+          }
         }
-      }
       }
 
       _pubsub.publish(requestTopic, payload, toRead, false);
 
       if (qos == 1) {
         uint8_t ackBuf[2] = {(uint8_t)(pid >> 8), (uint8_t)(pid & 0xFF)};
-        c.write(0x40);
+        c.write((uint8_t)0x40);
         writeRemainingLength(c, 2);
         c.write(ackBuf, 2);
       }
@@ -557,30 +570,30 @@ void MqttBridge::handleClient(int idx) {
 // ------------------------------------------------------------------
 void MqttBridge::sendConnAck(WiFiClient &c, bool sp, uint8_t rc) {
   uint8_t vh[2] = {(uint8_t)(sp ? 1 : 0), rc};
-  c.write(0x20);
+  c.write((uint8_t)0x20);
   writeRemainingLength(c, 2);
   c.write(vh, 2);
 }
 
 void MqttBridge::sendSubAck(WiFiClient &c, uint16_t pid, uint8_t count) {
   uint8_t vh[2] = {(uint8_t)(pid >> 8), (uint8_t)(pid & 0xFF)};
-  c.write(0x90);
+  c.write((uint8_t)0x90);
   writeRemainingLength(c, 2 + count);
   c.write(vh, 2);
   for (uint8_t i = 0; i < count; i++) {
-    c.write(0x00);
+    c.write((uint8_t)0x00);
   }
 }
 
 void MqttBridge::sendUnsubAck(WiFiClient &c, uint16_t pid) {
   uint8_t vh[2] = {(uint8_t)(pid >> 8), (uint8_t)(pid & 0xFF)};
-  c.write(0xB0);
+  c.write((uint8_t)0xB0);
   writeRemainingLength(c, 2);
   c.write(vh, 2);
 }
 
 void MqttBridge::sendPingResp(WiFiClient &c) {
-  c.write(0xD0);
+  c.write((uint8_t)0xD0);
   writeRemainingLength(c, 0);
 }
 
@@ -589,7 +602,7 @@ void MqttBridge::sendPublish(WiFiClient &c, const String &topic,
                              uint8_t qos) {
   uint16_t tlen = topic.length();
   uint32_t totalRemaining = 2 + tlen + len;
-  c.write((3 << 4) | (qos << 1));
+  c.write((uint8_t)((3 << 4) | (qos << 1)));
   writeRemainingLength(c, totalRemaining);
   c.write((uint8_t)(tlen >> 8));
   c.write((uint8_t)(tlen & 0xFF));

@@ -1,6 +1,6 @@
 # ============================================================
 #  BambuTagger-Gateway — Automatic Build & Release
-#  Compiles the ESP8266 firmware and publishes a GitHub
+#  Compiles the ESP32-S3 firmware and publishes a GitHub
 #  Release every time a version tag (v*) is pushed.
 #  A normal push / PR to main only compiles (smoke test,
 #  no release).
@@ -48,12 +48,12 @@ jobs:
 
       - name: Build with PlatformIO
         run: |
-          pio run -e esp12e
+          pio run -e esp32-s3
 
       - name: Copy and rename artefacts
         run: |
           mkdir -p build
-          cp "${{ github.workspace }}/.pio/build/esp12e/firmware.bin" \
+          cp "${{ github.workspace }}/.pio/build/esp32-s3/firmware.bin" \
              build/BambuTagger-Gateway.ino.bin
 
           echo "=== Build artefacts ==="
@@ -83,10 +83,10 @@ jobs:
 
             ### Via esptool (USB)
             ```bash
-            esptool.py --port /dev/ttyUSB0 --baud 921600 \
+            esptool.py --port /dev/ttyACM0 --baud 921600 \
               write_flash 0x0 BambuTagger-Gateway.ino.bin
             ```
 
-            > **Board:** ESP-12E (ESP8266)
+            > **Board:** Seeed XIAO ESP32-S3 (or any ESP32-S3 module with ≥8 MB flash)
             > **Framework:** Arduino (PlatformIO)
-            > **Flash:** 4 MB, DOUT
+            > **Flash:** 8 MB, QIO 80 MHz
