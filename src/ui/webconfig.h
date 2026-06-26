@@ -115,7 +115,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
 .info-row .val.mid{color:#d29922}
 .info-row .val.down{color:#da3633}
 </style>
-<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
+<footer>(c) 2026 by <a href="https://www.bambutagger.de" target="_blank">BambuTagger</a></footer>
 </body>
 </html>
 )html";
