@@ -58,18 +58,19 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 
 | Component | Notes | Buy |
 |---|---|---|
-| **ESP32-C3 board** | ESP32-C3 Super Mini, or any ESP32-C3 module with ≥4MB flash | [Aliexpress](https://www.aliexpress.com/) |
-| *ESP8266 board (legacy)* | NodeMCU v3, Wemos D1 mini, or any ESP-12E module (see `esp12e` environment) | [Aliexpress](https://www.aliexpress.com/) |
-| 5V power supply | USB-C (ESP32-C3) or Micro-USB (ESP8266), ≥500mA | — |
+| **ESP32-S3 board** | Seeed XIAO ESP32-S3 (standard, ≥8MB flash) | [Seeed Studio](https://www.seeedstudio.com/) |
+| *ESP8266 board (legacy)* | NodeMCU v3, Wemos D1 mini, or any ESP-12E module | [Aliexpress](https://www.aliexpress.com/) |
+| 5V power supply | USB-C (ESP32-S3) | — |
 
 ### Specifications
 
-| Component | ESP32-C3 | ESP8266 (legacy) |
+| | ESP32-S3 | ESP8266 (legacy) |
 |---|---|---|
-| MCU | RISC-V 32-bit (160 MHz) | Xtensa LX106 (80–160 MHz) |
-| RAM | 400 KB (usable) + 4 MB flash | 80 KB (usable) + 4 MB flash |
+| MCU | Xtensa LX7 dual-core (240 MHz) | Xtensa LX106 (80–160 MHz) |
+| RAM | 512 KB SRAM + 2 MB PSRAM | 80 KB (usable) |
+| Flash | 8 MB (QIO 80 MHz) | 4 MB (DOUT) |
 | WiFi | 802.11 b/g/n, AP + Station simultaneous | Same |
-| Status LED | GPIO8 (active low) | GPIO2/D4 (active low) |
+| Status LED | GPIO21 (active low) | GPIO2/D4 (active low) |
 
 ### LED Status Reference
 
@@ -91,7 +92,7 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 | `PubSubClient` | ^2.8 | Upstream MQTT connection to printer |
 | `ArduinoJson` | ^7.4 | JSON parsing |
 
-**ESP32-C3 built-in:** `WiFi`, `WebServer`, `ESPmDNS`, `HTTPClient`, `WiFiClientSecure`, `Update`, `ArduinoOTA`  
+**ESP32-S3 built-in:** `WiFi`, `WebServer`, `ESPmDNS`, `HTTPClient`, `WiFiClientSecure`, `Update`, `ArduinoOTA`  
 **ESP8266 built-in:** `ESP8266WiFi`, `ESP8266WebServer`, `ESP8266mDNS`, `ESP8266HTTPClient`, `Updater`, `ArduinoOTA`
 
 ### Building
@@ -100,11 +101,11 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 # Install PlatformIO (if not already)
 pip install platformio
 
-# Build for ESP32-C3 (recommended)
-pio run -e esp32-c3
+# Build for ESP32-S3 (recommended)
+pio run -e esp32-s3
 
-# Flash ESP32-C3
-pio run -e esp32-c3 -t upload --upload-port /dev/ttyACM0
+# Flash ESP32-S3
+pio run -e esp32-s3 -t upload --upload-port /dev/ttyACM0
 
 # Build for ESP8266 (legacy)
 pio run -e esp12e
@@ -118,12 +119,13 @@ pio device monitor -b 115200
 
 ### Board Settings (platformio.ini)
 
-| Setting | ESP32-C3 | ESP8266 (legacy) |
+| Setting | ESP32-S3 | ESP8266 (legacy) |
 |---|---|---|
-| Board | `esp32-c3-devkitm-1` | `esp12e` |
-| Flash Mode | `dout` | `dout` |
+| Board | `seeed_xiao_esp32s3` | `esp12e` |
+| Flash Mode | `qio` | `dout` |
 | Framework | Arduino | Arduino |
 | Monitor Speed | 115200 | 115200 |
+| USB CDC | `true` (native USB) | — |
 
 ---
 
@@ -164,7 +166,7 @@ Changing the EEPROM layout (magic number) clears saved settings; re-enter them v
 | Parameter | Gateway Value (plain) | Gateway Value (Bambu Studio) |
 |---|---|---|
 | Broker | Gateway AP IP (`192.168.4.1`) | Same |
-| Port | `1883` (plain TCP) | `8883` (plain TCP — TLS server not implemented on ESP32-C3; see Limitations) |
+| Port | `1883` (plain TCP) | `8883` (plain TCP — TLS server not implemented on ESP32-S3; see Limitations) |
 | Username | (none) | `bblp` (embedded in Bambu Studio) |
 | Password | (none) | Printer access code |
 | Subscribe | Any topic — the bridge forwards matching printer reports | `device/<SERIAL>/report` (auto-detected) |
@@ -210,7 +212,7 @@ BambuTagger-Gateway/
 The MQTT bridge is the core component. It:
 
 1. **Connects upstream** to the printer's MQTT broker (port 8883) over **TLS** (`WiFiClientSecure` with `setInsecure()`) as a single client using `PubSubClient`
-2. **Listens locally** on port 1883 (plain TCP) **and** port 8883 (plain TCP — TLS server not available on ESP32-C3; self-signed cert kept for future mbedTLS implementation) for MQTT connections
+2. **Listens locally** on port 1883 (plain TCP) **and** port 8883 (plain TCP — no TLS server on ESP32-S3; self-signed cert kept for future mbedTLS implementation) for MQTT connections
 3. **Parses incoming MQTT packets** (CONNECT, SUBSCRIBE, UNSUBSCRIBE, PUBLISH, PINGREQ, DISCONNECT) and responds appropriately
 4. **Tracks subscriptions** per local client, including wildcard topics (`#`, `+`)
 5. **Routes upstream messages** — when the printer publishes a report, the bridge matches all local client subscriptions and forwards the message
@@ -234,14 +236,14 @@ The MQTT bridge is the core component. It:
 
 | Symptom | Fix |
 |---|---|---|
-| Gateway AP not visible | Check `GATEWAY_AP_SSID` is set; verify ESP powers on (serial monitor) |
+| Gateway AP not visible | Check `GATEWAY_AP_SSID` is set; verify ESP powers on (serial monitor); ESP32-S3 may need a full WiFi reset (`WiFi.mode(WIFI_OFF)` then back to `WIFI_AP`) on some boards |
 | MQTT clients can't connect | Ensure clients connect to `192.168.4.1:1883` (plain) or `192.168.4.1:8883` (TLS for Bambu Studio); connect to the gateway, not the printer directly |
 | Upstream MQTT fails | Verify `PRINTER_HOST`, `PRINTER_ACCESS_CODE`, `PRINTER_SERIAL`; printer must be on same network |
 | Camera stream not working | Some printers use different camera ports; check your printer model's port and update `CAM_PRINTER_PORT` |
 | FTPS not working | FTPS requires TLS which the TCP proxy does not terminate — use raw FTP or MQTT for file ops |
-| `DNS Failed for ...` in serial | ESP32-C3 doesn't resolve `.local` mDNS names via normal DNS — the gateway handles this via `MDNS.queryHost()` once station WiFi connects |
+| `DNS Failed for ...` in serial | ESP32-S3 doesn't resolve `.local` mDNS names via normal DNS — the gateway handles this via `MDNS.queryHost()` once station WiFi connects |
 | LED stays on / no blink | Gateway is booting; if stuck, check serial output for errors |
-| Bambu Studio can't connect | Connect via LAN to the gateway's IP; use the printer model/serial from the Printer web page (set these first). The gateway advertises via mDNS (`_bambu._tcp`) and accepts plain TCP on port 8883. Note: ESP32-C3 does not support TLS server — Bambu Studio may refuse plain TCP; if so, use the gateway's `1883` port and configure Bambu Studio to connect without TLS (or install the self-signed cert from the `/cert` page — see Limitations). |
+| Bambu Studio can't connect | Connect via LAN to the gateway's IP; use the printer model/serial from the Printer web page (set these first). The gateway advertises via mDNS (`_bambu._tcp`) and accepts plain TCP on port 8883. Note: ESP32-S3 does not support TLS server — Bambu Studio may refuse plain TCP; if so, use the gateway's `1883` port and configure Bambu Studio to connect without TLS (or install the self-signed cert from the `/cert` page — see Limitations). |
 
 ---
 
@@ -249,8 +251,8 @@ The MQTT bridge is the core component. It:
 
 - **FTPS**: The TCP proxy forwards raw TCP bytes only. FTPS (FTP over TLS) requires TLS termination which is not implemented. For file operations, use the printer's MQTT API instead.
 - **Camera**: The proxy assumes a plain TCP stream (e.g., MJPEG). If your printer uses a different protocol, adjust accordingly.
-- **Security**: Local MQTT on port 1883 is plain TCP (no TLS). Bambu Studio connects via TLS on port 8883 with a self-signed certificate. ESP32-C3 lacks `BearSSL::WiFiServerSecure`, so port 8883 also uses plain TCP — Bambu Studio will reject it without installing the self-signed CA cert from the `/cert` page (import into slicer's bundled CA store). The gateway is designed for isolated/trusted networks.
-- **mDNS resolution**: ESP32-C3's `WiFi.hostByName()` does not resolve `.local` mDNS names (unlike ESP8266). The gateway uses `MDNS.queryHost()` after station WiFi connects — resolution takes ~3 seconds per attempt.
+- **Security**: Local MQTT on port 1883 is plain TCP (no TLS). Bambu Studio connects via TLS on port 8883 with a self-signed certificate. ESP32-S3 lacks `BearSSL::WiFiServerSecure`, so port 8883 also uses plain TCP — Bambu Studio will reject it without installing the self-signed CA cert from the `/cert` page (import into slicer's bundled CA store). The gateway is designed for isolated/trusted networks.
+- **mDNS resolution**: ESP32-S3's `WiFi.hostByName()` does not resolve `.local` mDNS names (unlike ESP8266). The gateway uses `MDNS.queryHost()` after station WiFi connects — resolution takes ~3 seconds per attempt.
 
 ---
 
