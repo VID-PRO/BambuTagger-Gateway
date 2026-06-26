@@ -31,19 +31,19 @@ Bambu Lab printers accept **3 simultaneous connections**. Once that limit is hit
 
 ```
 ┌──────────-────┐     ┌──────────────────────┐     ┌─────────────────┐
-│ MQTT Client 1 │────▶│                      │────▶│                 │
-│ MQTT Client 2 │────▶│  ESP32-S3 Gateway   │────▶│  Bambu Lab      │
-│ MQTT Client 3 │────▶│  ┌────────────────┐  │     │  Printer        │
-│      ...      │     │  │ MQTT Bridge    │──┼────▶│  ┌───────────┐  │
+│ MQTT Client 1 │────>│                      │────>│                 │
+│ MQTT Client 2 │────>│  ESP32-S3 Gateway    │────>│  Bambu Lab      │
+│ MQTT Client 3 │────>│  ┌────────────────┐  │     │  Printer        │
+│      ...      │     │  │ MQTT Bridge    │──┼────>│  ┌───────────┐  │
 │ MQTT Client 8 │     │  │ (1 upstream    │  │     │  │ MQTT 8883 │  │
 ├──────────────-┤     │  │  connection)   │  │     │  ├───────────┤  │
-│ Camera Client │────▶│  ├────────────────┤  │     │  │ Camera    │  │
-│ Camera Client │────▶│  │ Camera Proxy   │──┼────▶│  │ Stream    │  │
+│ Camera Client │────>│  ├────────────────┤  │     │  │ Camera    │  │
+│ Camera Client │────>│  │ Camera Proxy   │──┼────>│  │ Stream    │  │
 │      ...      │     │  │ (1 upstream    │  │     │  ├───────────┤  │
 │ Camera Client │     │  │  connection)   │  │     │  │ FTPS 990  │  │
 ├─────────────-─┤     │  ├────────────────┤  │     │  └───────────┘  │
-│ FTP Client    │────▶│  │ FTPS Proxy     │──┼────▶│                 │
-│ FTP Client    │────▶│  │ (1 upstream    │  │     │                 │
+│ FTP Client    │────>│  │ FTPS Proxy     │──┼────>│                 │
+│ FTP Client    │────>│  │ (1 upstream    │  │     │                 │
 │      ...      │     │  │  connection)   │  │     │                 │
 └──────────────-┘     └──────────────────────┘     └─────────────────┘
 ```
