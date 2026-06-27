@@ -47,7 +47,6 @@ private:
   WiFiClientSecure *_upTcp = nullptr;
   PubSubClient _pubsub;
   WiFiServer _localServer;
-  WiFiServer _tlsServer;
   MqttClientCtx _clients[MAX_MQTT_CLIENTS];
   unsigned long _lastReconnect;
   GatewayConfig *_cfg;

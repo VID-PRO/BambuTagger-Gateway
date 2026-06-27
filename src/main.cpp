@@ -21,6 +21,21 @@ MqttBridge mqtt;
 TcpProxy camProxy("camera", CAM_LOCAL_PORT, PRINTER_HOST_DFLT, CAM_PRINTER_PORT, MAX_TCP_CLIENTS);
 TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT, MAX_TCP_CLIENTS);
 
+// ── MQTT passthrough (port 8883) ─────────────────────────────────────────
+// Transparent TCP relay: each downstream client gets its own upstream
+// connection to the real printer. Bambu Studio does TLS end-to-end with
+// the printer's certificate (BBL-signed) instead of the gateway's self-signed
+// cert. Local MQTT tools use port 1883 (plain) via MqttBridge.
+#define MAX_MQTT_PASSTHROUGH 4
+struct {
+  WiFiClient *down;
+  WiFiClient *up;
+  bool active;
+  int deadCount;       // consecutive iterations with !connected
+  bool relayed;        // true once we relayed at least one byte
+} _mqttPtClients[MAX_MQTT_PASSTHROUGH];
+static WiFiServer _mqttPassthrough(MQTT_PRINTER_PORT);
+
 // SSDP (Simple Service Discovery Protocol) responder for Bambu Lab auto-detection.
 // Bambu Studio discovers printers via SSDP on UDP port 2021.
 // Real printers broadcast NOTIFY every ~10s to 239.255.255.250:2021.
@@ -40,41 +55,41 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
     snprintf(buf, len,
       "HTTP/1.1 200 OK\r\n"
       "Server: UPnP/1.0\r\n"
-       "Location: %s\r\n"
-       "ST: urn:bambulab-com:device:3dprinter:1\r\n"
-       "USN: %s\r\n"
-       "Cache-Control: max-age=1800\r\n"
+      "Date: Thu, 26 Jun 2025 00:00:00 GMT\r\n"
+      "Location: %s\r\n"
+      "ST: urn:bambulab-com:device:3dprinter:1\r\n"
+      "EXT: \r\n"
+      "USN: %s\r\n"
+      "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
       "DevName.bambu.com: %s\r\n"
-      "DevSignal.bambu.com: -44\r\n"
       "DevConnect.bambu.com: lan\r\n"
       "DevBind.bambu.com: free\r\n"
-       "Devseclink.bambu.com: secure\r\n"
-       "DevInf.bambu.com: eth0\r\n"
-       "DevVersion.bambu.com: 01.07.00.00\r\n"
-       "DevCap.bambu.com: 1\r\n"
-       "\r\n",
-       ip, serial, cfg->printerModel, _displayName);
+      "Devseclink.bambu.com: secure\r\n"
+      "DevInf.bambu.com: wlan0\r\n"
+      "DevVersion.bambu.com: 01.07.00.00\r\n"
+      "DevCap.bambu.com: 1\r\n"
+      "\r\n",
+      ip, serial, cfg->printerModel, _displayName);
     } else {
       snprintf(buf, len,
         "NOTIFY * HTTP/1.1\r\n"
-        "Host: 239.255.255.250:2021\r\n"
-       "Server: UPnP/1.0\r\n"
-        "Location: %s\r\n"
-        "NT: urn:bambulab-com:device:3dprinter:1\r\n"
-        "NTS: ssdp:alive\r\n"
-       "USN: %s\r\n"
-       "Cache-Control: max-age=1800\r\n"
-       "DevModel.bambu.com: %s\r\n"
-       "DevName.bambu.com: %s\r\n"
-       "DevSignal.bambu.com: -44\r\n"
-       "DevConnect.bambu.com: lan\r\n"
-       "DevBind.bambu.com: free\r\n"
-        "Devseclink.bambu.com: secure\r\n"
-        "DevInf.bambu.com: eth0\r\n"
-        "DevVersion.bambu.com: 01.07.00.00\r\n"
-        "DevCap.bambu.com: 1\r\n"
-        "\r\n",
+      "Host: 239.255.255.250:2021\r\n"
+      "Server: UPnP/1.0\r\n"
+      "Location: %s\r\n"
+      "NT: urn:bambulab-com:device:3dprinter:1\r\n"
+      "NTS: ssdp:alive\r\n"
+      "USN: %s\r\n"
+      "Cache-Control: max-age=1800\r\n"
+      "DevModel.bambu.com: %s\r\n"
+      "DevName.bambu.com: %s\r\n"
+      "DevConnect.bambu.com: lan\r\n"
+      "DevBind.bambu.com: free\r\n"
+      "Devseclink.bambu.com: secure\r\n"
+      "DevInf.bambu.com: wlan0\r\n"
+      "DevVersion.bambu.com: 01.07.00.00\r\n"
+      "DevCap.bambu.com: 1\r\n"
+      "\r\n",
         ip, serial, cfg->printerModel, _displayName);
   }
 }
@@ -245,8 +260,7 @@ void setup() {
   camProxy.setRemote(cfg->printerHost, CAM_PRINTER_PORT);
   ftpsProxy.setRemote(cfg->printerHost, FTPS_PRINTER_PORT);
 
-  Serial.print("Web UI at http://");
-  Serial.println(WiFi.softAPIP());
+  Serial.printf("Web UI at http://%s (initial AP, moves to STA)\n", WiFi.softAPIP().toString().c_str());
   Serial.print("Printer: ");
   Serial.print(cfg->printerHost);
   Serial.print("  Serial: ");
@@ -254,6 +268,9 @@ void setup() {
 
   camProxy.begin();
   ftpsProxy.begin();
+  _mqttPassthrough.begin();
+  _mqttPassthrough.setNoDelay(true);
+  Serial.printf("MQTT passthrough: TCP relay on port %d\n", MQTT_PRINTER_PORT);
 
   Serial.printf("Gateway AP: %s\n", GATEWAY_AP_SSID);
   Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
@@ -264,23 +281,27 @@ void setup() {
 static void startStationServices(GatewayConfig *cfg) {
   Serial.printf("Station connected — IP: %s  heap: %u\n",
     WiFi.localIP().toString().c_str(), ESP.getFreeHeap());
+  Serial.printf("Web UI at http://%s\n", WiFi.localIP().toString().c_str());
 
   delay(500);
-  // Rebind MQTT servers after WiFi mode switch (AP → STA) ensures listeners
+  // Rebind servers after WiFi mode switch (AP → STA) ensures listeners
   // are bound to the active station interface.
   mqtt.rebind();
+  _mqttPassthrough.close();
+  _mqttPassthrough.begin();
+  _mqttPassthrough.setNoDelay(true);
 
   // Verify the MQTT server is listening on the station IP
   delay(100);
   WiFiClient selfTest;
   IPAddress local = WiFi.localIP();
-  if (selfTest.connect(local, MQTT_PRINTER_PORT)) {
+  if (selfTest.connect(local, MQTT_LOCAL_PORT)) {
     Serial.printf("MQTT: self-test OK — connected to %s:%d\n",
-      local.toString().c_str(), MQTT_PRINTER_PORT);
+      local.toString().c_str(), MQTT_LOCAL_PORT);
     selfTest.stop();
   } else {
     Serial.printf("MQTT: WARNING self-test FAILED — %s:%d unreachable\n",
-      local.toString().c_str(), MQTT_PRINTER_PORT);
+      local.toString().c_str(), MQTT_LOCAL_PORT);
   }
 
   startSSDP(cfg);
@@ -312,6 +333,91 @@ static void startStationServices(GatewayConfig *cfg) {
   ArduinoOTA.begin();
 
   Serial.printf("After MDNS+OTA — heap: %u\n", ESP.getFreeHeap());
+}
+
+static void handleMqttPassthrough() {
+  GatewayConfig *cfg = webconfigGetConfig();
+  bool hasRemote = strlen(cfg->printerHost) > 0;
+
+  // Accept new connections on port 8883
+  WiFiClient *down = new WiFiClient(_mqttPassthrough.accept());
+  if (down && *down && down->connected()) {
+    if (!hasRemote) { down->stop(); delete down; return; }
+    WiFiClient *up = new WiFiClient;
+    up->setTimeout(5000);
+    if (up->connect(cfg->printerHost, MQTT_PRINTER_PORT)) {
+      up->setNoDelay(true);
+      for (int i = 0; i < MAX_MQTT_PASSTHROUGH; i++) {
+        if (!_mqttPtClients[i].active) {
+          _mqttPtClients[i].down = down;
+          _mqttPtClients[i].up = up;
+          _mqttPtClients[i].active = true;
+          _mqttPtClients[i].deadCount = 0;
+          _mqttPtClients[i].relayed = false;
+          Serial.printf("PASSTHROUGH: client %d from %s\n", i,
+            down->remoteIP().toString().c_str());
+          break;
+        }
+      }
+    } else {
+      down->stop(); delete down;
+      delete up;
+    }
+  } else {
+    delete down;
+  }
+
+  // Relay bytes bidirectionally for each active client
+  for (int i = 0; i < MAX_MQTT_PASSTHROUGH; i++) {
+    if (!_mqttPtClients[i].active) continue;
+    auto &c = _mqttPtClients[i];
+    const char *why = nullptr;
+
+    // Forward downstream → upstream
+    size_t davail = c.down->available();
+    if (davail > 0) {
+      uint8_t buf[512];
+      int len = c.down->read(buf, davail > sizeof(buf) ? sizeof(buf) : davail);
+      if (len > 0) {
+        if (!c.relayed) {
+          Serial.printf("PASSTHROUGH: cl%d DOWN first %d bytes:", i, len);
+          for (int j = 0; j < len && j < 32; j++) Serial.printf(" %02x", buf[j]);
+          Serial.println();
+        }
+        c.relayed = true;
+        c.up->write(buf, len);
+      }
+    }
+
+    // Forward upstream → downstream
+    size_t uavail = c.up->available();
+    if (uavail > 0) {
+      uint8_t buf[512];
+      int len = c.up->read(buf, uavail > sizeof(buf) ? sizeof(buf) : uavail);
+      if (len > 0) {
+        c.relayed = true;
+        c.down->write(buf, len);
+      }
+    }
+
+    // Cleanup: idle timeout (no data for 60s) or connection errors
+    if (davail == 0 && uavail == 0) {
+      if (!c.down->connected()) {
+        c.deadCount++;
+        if (c.deadCount >= 3) why = "down closed";
+      }
+    } else {
+      c.deadCount = 0;
+    }
+
+    if (why) {
+      Serial.printf("PASSTHROUGH: client %d disconnected (%s) relayed=%d\n",
+        i, why, c.relayed);
+      c.down->stop(); delete c.down; c.down = nullptr;
+      c.up->stop(); delete c.up; c.up = nullptr;
+      c.active = false;
+    }
+  }
 }
 
 void loop() {
@@ -350,6 +456,7 @@ void loop() {
   }
 
   mqtt.loop();
+  handleMqttPassthrough();
   camProxy.loop();
   ftpsProxy.loop();
   ArduinoOTA.handle();

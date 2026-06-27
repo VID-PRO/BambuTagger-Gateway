@@ -39,6 +39,8 @@ private:
   WiFiClient *_tcp = nullptr;
   bool _ok = false;
   bool _hsDone = false;
+  int _hsRetries = 0;
+  unsigned long _hsStart = 0;
   mbedtls_ssl_context _ssl;
   mbedtls_ssl_config _conf;
   mbedtls_x509_crt _cert;

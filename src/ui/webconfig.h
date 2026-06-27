@@ -103,7 +103,7 @@ static const char _PAGE_ROOT2[] PROGMEM = R"html(
     <div class="info-row"><span class="lbl">Gateway Name</span><span class="val">%%PRINTER_NAME%%</span></div>
     <div class="info-row"><span class="lbl">Serial</span><span class="val">%%GATEWAY_SERIAL%%</span></div>
     <div class="info-row"><span class="lbl">Model</span><span class="val">%%PRINTER_MODEL%%</span></div>
-    <div class="info-row"><span class="lbl">TLS Cert</span><span class="val"><a href="/cert" style="color:#58a6ff;text-decoration:none">Import &rarr;</a></span></div>
+    <div class="info-row"><span class="lbl">Access Code</span><span class="val">%%PRINTER_CODE%%</span></div>
   </div>
 </div>
 </div>
@@ -349,6 +349,7 @@ static String buildRoot() {
   page.replace("%%PRINTER_HOST%%", _cfg.printerHost);
   page.replace("%%GATEWAY_SERIAL%%", _cfg.gatewaySerial);
   page.replace("%%PRINTER_MODEL%%", _cfg.printerModel);
+  page.replace("%%PRINTER_CODE%%", _cfg.printerCode);
   page.replace("%%PRINTER_NAME%%", _displayName);
   {
     const char *mqttCls, *mqttLabel;
@@ -599,29 +600,18 @@ static const char _PAGE_CERT2[] PROGMEM = R"html(
 </nav>
 <div class="wrapper">
 <div class="card" style="max-width:560px">
-  <h2>TLS Certificate</h2>
+  <h2>Connection Info</h2>
   <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
-    This gateway presents a <strong>self-signed</strong> TLS certificate
-    on port 8883. Bambu Studio and OrcaSlicer verify printer certificates
-    against their bundled <code>printer.cer</code> — they do
-    <strong>not</strong> use the system certificate store.
+    Port <strong>8883</strong> is a transparent TCP relay to the real printer.
+    Bambu Studio negotiates TLS directly with the printer's certificate — no
+    gateway certificate import is needed.
   </p>
   <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
-    To trust this gateway, <strong>append</strong> the downloaded
-    certificate to the slicer's <code>printer.cer</code> file (keep the
-    existing content so real printers still work):<br><br>
-    <strong>macOS</strong>:<br>
-    <code style="font-size:11px">sudo bash -c 'cat ~/Downloads/gateway-ca.pem &gt;&gt; /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer'</code><br>
-    <small>(OrcaSlicer: <code style="font-size:11px">/Applications/OrcaSlicer.app/Contents/Resources/cert/printer.cer</code>)</small><br><br>
-    <strong>Windows</strong>:<br>
-    <code style="font-size:11px">Notepad as admin: C:\Program Files\Bambu Studio\resources\cert\printer.cer</code><br>
-    <small>(OrcaSlicer: <code style="font-size:11px">C:\Program Files\OrcaSlicer\resources\cert\printer.cer</code>)</small><br><br>
-    Paste the contents of <code>gateway-ca.pem</code> at the end of the
-    file, save, and restart the slicer.
+    For local MQTT tools, use port <strong>1883</strong> (plain TCP).
+    The gateway automatically subscribes and forwards printer reports.
   </p>
-  <a href="/cert?dl=1" style="display:inline-block;padding:10px 20px;margin:0 0 6px;background:#238636;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">Download gateway-ca.pem</a>
-  <p style="margin:12px 0 0;font-size:11px;color:#484f58">
-    Gateway serial: %%GATEWAY_SERIAL%%
+  <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
+    Access code (from Dashboard): <code>%%PRINTER_CODE%%</code>
   </p>
 </div>
 </div>
@@ -630,19 +620,12 @@ static const char _PAGE_CERT2[] PROGMEM = R"html(
 </html>
 )html";
 
-// Serve the TLS CA certificate page (or download the PEM with ?dl=1).
+// Serve the connection info page.
 static void handleCert() {
-  if (!_server.hasArg("dl")) {
-    String page = buildPage(_PAGE_CERT, _PAGE_CERT2);
-    page.replace("%%VERSION%%", VERSION);
-    page.replace("%%GATEWAY_SERIAL%%", _cfg.gatewaySerial);
-    _server.send(200, "text/html", page);
-    return;
-  }
-  const char *pem = mqtt.getTlsCert();
-  _server.sendHeader("Content-Disposition",
-                      "attachment; filename=gateway-ca.pem");
-  _server.send(200, "application/x-pem-file", pem);
+  String page = buildPage(_PAGE_CERT, _PAGE_CERT2);
+  page.replace("%%VERSION%%", VERSION);
+  page.replace("%%PRINTER_CODE%%", _cfg.printerCode);
+  _server.send(200, "text/html", page);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────

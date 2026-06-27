@@ -1,5 +1,6 @@
 #include "tls_client.h"
 #include <string.h>
+
 #define TAG "TLS"
 
 static void tls_debug(void *ctx, int level, const char *file, int line, const char *str) {
@@ -22,6 +23,7 @@ TlsWiFiClient::~TlsWiFiClient() {
 bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyPem) {
   _tcp = tcp;
   _hsDone = false;
+  _hsRetries = 0;
   _ok = false;
 
   int r;
@@ -71,10 +73,11 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
                              const uint8_t *keyDer, size_t keyLen) {
   _tcp = tcp;
   _hsDone = false;
+  _hsRetries = 0;
+  _hsStart = 0;
   _ok = false;
 
   int r;
-
   r = mbedtls_ctr_drbg_seed(&_drbg, mbedtls_entropy_func, &_entropy, (const uint8_t *)TAG, strlen(TAG));
   if (r != 0) { Serial.printf("TLS: drbg seed failed: -0x%x\n", -r); return false; }
 
@@ -107,8 +110,9 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   r = mbedtls_ssl_config_defaults(&_conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
   if (r != 0) { Serial.printf("TLS: config defaults failed: -0x%x\n", -r); return false; }
 
-  // Force TLS 1.2 minimum
-  mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+  // Allow any TLS version (1.0-1.2) — mbedTLS in ESP-IDF lacks TLS 1.3 support
+  // so Studio will negotiate down to 1.2 or 1.1
+  mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_1);
   mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
 
   mbedtls_ssl_conf_dbg(&_conf, tls_debug, NULL);
@@ -126,8 +130,20 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
 
 int TlsWiFiClient::continueHandshake() {
   if (!_ok || _hsDone) return _hsDone ? 1 : -1;
+
+  if (_hsStart == 0) _hsStart = millis();
+
+  // 30-second total timeout for entire handshake
+  if (millis() - _hsStart > 30000) {
+    Serial.printf("TLS: handshake timed out\n");
+    _ok = false;
+    return -1;
+  }
+
+  _hsRetries++;
+
   int r = mbedtls_ssl_handshake(&_ssl);
-  if (r == 0) { _hsDone = true; return 1; }
+  if (r == 0) { _hsDone = true; _hsRetries = 0; return 1; }
   if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) return 0;
   Serial.printf("TLS: handshake error: -0x%x\n", -r);
   _ok = false;
@@ -183,22 +199,14 @@ int TlsWiFiClient::read() {
 }
 
 int TlsWiFiClient::read(uint8_t *buf, size_t size) {
-  if (!_ok || !_hsDone) { Serial.printf("TLS-READ-SKIP: ok=%d hs=%d\n", _ok, _hsDone); return -1; }
-  int avail_before = mbedtls_ssl_get_bytes_avail(&_ssl);
+  if (!_ok || !_hsDone) { return -1; }
   int r = mbedtls_ssl_read(&_ssl, buf, size);
   if (r < 0) {
-    if (r == MBEDTLS_ERR_SSL_WANT_READ) {
-      static unsigned long lastW = 0;
-      unsigned long now = millis();
-      if (now - lastW > 1000) { lastW = now; Serial.printf("TLS-WANT: avail=%d ok=%d hs=%d\n", avail_before, _ok, _hsDone); }
-      return -1;
-    }
-    if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) { Serial.printf("TLS-CLOSE\n"); return -1; }
-    Serial.printf("TLS-READ-ERR: -0x%x\n", -r);
+    if (r == MBEDTLS_ERR_SSL_WANT_READ) return -1;
+    if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) { return -1; }
     _ok = false;
     return -1;
   }
-  if (r > 0) Serial.printf("TLS-READ-OK: %d bytes [%02x]\n", r, buf[0]);
   return r;
 }
 
@@ -215,16 +223,13 @@ int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
   TlsWiFiClient *c = (TlsWiFiClient *)ctx;
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
   int r = c->_tcp->read(buf, len);
-  Serial.printf("BR: ask=%d got=%d av=%d\n", len, r, c->_tcp->available());
-  if (r > 0) {
-    if (!c->_hsDone) {
-      int show = r > 80 ? 80 : r;
-      Serial.printf("BR-DATA:");
+    if (r > 0) {
+      int show = r > 28 ? 28 : r;
+      Serial.printf("TLS-RECV(%d)%s:", r, c->_hsDone ? " app" : "");
       for (int i = 0; i < show; i++) Serial.printf(" %02x", (unsigned)buf[i]);
       Serial.printf("\n");
+      return r;
     }
-    return r;
-  }
   if (r == 0) return MBEDTLS_ERR_SSL_WANT_READ;
   return MBEDTLS_ERR_SSL_CONN_EOF;
 }
@@ -235,12 +240,13 @@ int TlsWiFiClient::bio_send(void *ctx, const unsigned char *buf, size_t len) {
   int r = c->_tcp->write(buf, len);
   if (r > 0) {
     if (!c->_hsDone) {
-      int show = r > 16 ? 16 : r;
+      int show = r > 12 ? 12 : r;
       Serial.printf("TLS-SEND(ask=%d wrote=%d):", len, r);
       for (int i = 0; i < show; i++) Serial.printf(" %02x", (unsigned)buf[i]);
       Serial.printf("\n");
     }
     return r;
   }
+  Serial.printf("TLS-SEND-FAIL(ask=%d r=%d)\n", len, r);
   return MBEDTLS_ERR_SSL_WANT_WRITE;
 }

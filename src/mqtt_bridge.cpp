@@ -2,7 +2,6 @@
 #ifdef ESP32
 #include <ESPmDNS.h>
 #include <mbedtls/base64.h>
-#include "tls_client.h"
 #endif
 
 static char reportTopic[64];
@@ -33,7 +32,7 @@ static void derToPem(const uint8_t *der, size_t derLen, char *pem, size_t pemSiz
 }
 
 MqttBridge::MqttBridge()
-  : _localServer(MQTT_LOCAL_PORT), _tlsServer(MQTT_PRINTER_PORT),
+  : _localServer(MQTT_LOCAL_PORT),
     _lastReconnect(0), _cfg(nullptr) {
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     _clients[i].active = false;
@@ -60,10 +59,8 @@ void MqttBridge::rebind() {
   _localServer.close();
   _localServer.begin();
   _localServer.setNoDelay(true);
-  _tlsServer.close();
-  _tlsServer.begin();
-  _tlsServer.setNoDelay(true);
-  Serial.println("MQTT: servers rebound");
+  WiFiClient drain = _localServer.accept();
+  Serial.println("MQTT: server rebound (drained)");
 }
 
 void MqttBridge::begin(GatewayConfig *cfg) {
@@ -88,10 +85,7 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   }
 #endif
 
-  // TLS server on port 8883 (Bambu Studio connects here with TLS)
-  _tlsServer.begin();
-  _tlsServer.setNoDelay(true);
-  Serial.println("MQTT: server ready on port 8883");
+  Serial.println("MQTT: local server ready on port 1883");
 }
 
 const char *MqttBridge::getTlsCert() {
@@ -125,7 +119,9 @@ void MqttBridge::loop() {
     _pubsub.loop();
   }
 
-  acceptClient();
+  int ac;
+  while ((ac = acceptClient()) >= 0) {}
+  if (ac < -1) Serial.printf("MQTT: acceptClient returned %d\n", ac);
 
   static unsigned long lastDiag = 0;
   unsigned long now = millis();
@@ -133,13 +129,6 @@ void MqttBridge::loop() {
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) continue;
     active++;
-#ifdef ESP32
-    if (_clients[i].isTls && now - lastDiag > 5000) {
-      TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(_clients[i].client);
-      Serial.printf("MQTT: cl%d conn=%d avail=%d hs=%d\n", i,
-        tls->connected(), tls->available(), tls->handshakeDone());
-    }
-#endif
   }
   if (active > 0 && now - lastDiag > 10000) {
     lastDiag = now;
@@ -152,21 +141,6 @@ void MqttBridge::loop() {
       disconnectClient(i);
       continue;
     }
-#ifdef ESP32
-    // Continue pending TLS handshake
-    if (_clients[i].isTls) {
-      TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(_clients[i].client);
-      if (!tls->handshakeDone()) {
-        int hs = tls->continueHandshake();
-        if (hs < 0) {
-          Serial.printf("MQTT: TLS hs failed for client %d\n", i);
-          disconnectClient(i); continue;
-        }
-        if (hs == 0) continue; // handshake still busy
-        Serial.printf("MQTT: TLS hs complete for client %d\n", i);
-      }
-    }
-#endif
     handleClient(i);
   }
 }
@@ -286,62 +260,22 @@ void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int l
 // downstream client management
 // ------------------------------------------------------------------
 int MqttBridge::acceptClient() {
-  bool isTls = false;
-  WiFiClient *c = nullptr;
+  WiFiClient plain = _localServer.accept();
+  if (!plain) return -1;
 
-  // Check TLS server (port 8883) — Bambu Studio connects here with TLS
-  WiFiClient *rawPtr = new WiFiClient(_tlsServer.accept());
-  if (rawPtr && *rawPtr) {
-    TlsWiFiClient *tls = new TlsWiFiClient();
-    Serial.printf("MQTT: TLS accept cert len=%d keyLen=%d\n", _certLen, _keyLen);
-    bool ok = _certLen > 0 && tls->beginDer(rawPtr, _certDer, _certLen, _keyDer, _keyLen);
-    if (ok) {
-      // Start non-blocking TLS handshake; may return 0 (WANT_READ/WANT_WRITE)
-      int hs = tls->continueHandshake();
-      if (hs < 0) {
-        Serial.printf("MQTT: TLS handshake failed from %s\n", rawPtr->remoteIP().toString().c_str());
-        delete tls;
-        return -1;
-      }
-      c = tls;
-      isTls = true;
-      Serial.printf("MQTT: TLS client from %s (hs=%d)\n", rawPtr->remoteIP().toString().c_str(), hs);
-    } else {
-      Serial.printf("MQTT: TLS begin failed from %s\n", rawPtr->remoteIP().toString().c_str());
-      delete tls;
-      delete rawPtr;
-      return -1;
-    }
-  } else {
-    delete rawPtr;
-  }
-
-  if (!c) {
-    // Check plain TCP server (port 1883) — for local tools/testing
-    WiFiClient plain = _localServer.accept();
-    if (plain) {
-      c = new WiFiClient(plain);
-      Serial.printf("MQTT: plain client from %s\n", c->remoteIP().toString().c_str());
-    }
-  }
-
+  WiFiClient *c = new WiFiClient(plain);
   if (!c || !c->connected()) {
     delete c;
     return -1;
   }
-  // Set TCP_NODELAY on the real socket
-#ifdef ESP32
-  if (isTls) {
-    static_cast<TlsWiFiClient*>(c)->tcpSetNoDelay(true);
-  } else
-#endif
-    c->setNoDelay(true);
+  c->setNoDelay(true);
+  Serial.printf("MQTT: client from %s\n", c->remoteIP().toString().c_str());
 
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) {
       _clients[i].client = c;
       _clients[i].active = true;
-      _clients[i].isTls = isTls;
+      _clients[i].isTls = false;
       _clients[i].subCount = 0;
       _clients[i].lastPid = 0;
       _clients[i].lastActivity = millis();
@@ -374,25 +308,6 @@ void MqttBridge::handleClient(int idx) {
 
   uint8_t header;
   if (!readByte(c, header)) {
-#ifdef ESP32
-    if (_clients[idx].isTls) {
-      TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(&c);
-      int av = tls->available();
-      int conn = tls->connected();
-      if (av > 0 || conn) {
-        // readByte got nothing — log state briefly
-        static unsigned long lastLog = 0;
-        unsigned long now = millis();
-        if (now - lastLog > 3000) {
-          lastLog = now;
-          Serial.printf("MQTT: cl%d TLS poll avail=%d conn=%d ok=%d hs=%d\n", idx, av, conn,
-            (bool)(*tls), tls->handshakeDone());
-        }
-      } else {
-        Serial.printf("MQTT: cl%d disconnected (avail=%d tcp=%d)\n", idx, av, conn);
-      }
-    }
-#endif
     return;
   }
   cl.lastActivity = millis();
