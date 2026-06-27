@@ -41,7 +41,7 @@ public:
   MqttStatus getStatus();
 
   // TLS certificate PEM (for web UI download)
-  static const char *getTlsCert();
+  const char *getTlsCert();
 
 private:
   WiFiClientSecure *_upTcp = nullptr;
@@ -57,6 +57,7 @@ private:
   uint8_t _keyDer[2048];
   size_t _certLen = 0;
   size_t _keyLen = 0;
+  char _certPem[3072];
 #endif
 
   // upstream

@@ -1,15 +1,6 @@
 #include "tls_client.h"
 #include <string.h>
-#include <mbedtls/ssl_ciphersuites.h>
-
 #define TAG "TLS"
-
-// Force RSA key exchange cipher suites only (avoid ECDHE curve issues)
-static const int forced_ciphersuites[] = {
-  MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256,
-  MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384,
-  0
-};
 
 static void tls_debug(void *ctx, int level, const char *file, int line, const char *str) {
   Serial.printf("TLSDBG: %s\n", str);
@@ -60,6 +51,22 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   return true;
 }
 
+// Return the DER length of a single ASN.1 SEQUENCE at buf, or 0 on error
+static size_t der_seq_length(const uint8_t *buf, size_t maxlen) {
+  if (maxlen < 2 || buf[0] != 0x30) return 0;
+  size_t len;
+  if (buf[1] < 0x80) {
+    len = buf[1];
+    return 2 + len;
+  }
+  size_t nbytes = buf[1] & 0x7f;
+  if (nbytes == 0 || 2 + nbytes > maxlen) return 0;
+  len = 0;
+  for (size_t i = 0; i < nbytes; i++)
+    len = (len << 8) | buf[2 + i];
+  return 2 + nbytes + len;
+}
+
 bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t certLen,
                              const uint8_t *keyDer, size_t keyLen) {
   _tcp = tcp;
@@ -77,8 +84,21 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   mbedtls_pk_free(&_pkey);
   mbedtls_pk_init(&_pkey);
 
-  r = mbedtls_x509_crt_parse(&_cert, certDer, certLen);
-  if (r != 0) { Serial.printf("TLS: cert parse failed: -0x%x\n", -r); return false; }
+  // Parse chain of concatenated DER certs (leaf + intermediates)
+  size_t off = 0;
+  while (off < certLen) {
+    size_t derLen = der_seq_length(certDer + off, certLen - off);
+    if (derLen == 0) {
+      Serial.printf("TLS: bad DER at offset %u\n", (unsigned)off);
+      return false;
+    }
+    r = mbedtls_x509_crt_parse(&_cert, certDer + off, derLen);
+    if (r != 0) {
+      Serial.printf("TLS: cert parse failed at offset %u: -0x%x\n", (unsigned)off, -r);
+      return false;
+    }
+    off += derLen;
+  }
 
   r = mbedtls_pk_parse_key(&_pkey, keyDer, keyLen, NULL, 0);
   if (r != 0) { Serial.printf("TLS: key parse failed: -0x%x\n", -r); return false; }
@@ -92,7 +112,6 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
 
   mbedtls_ssl_conf_dbg(&_conf, tls_debug, NULL);
-  mbedtls_ssl_conf_ciphersuites(&_conf, forced_ciphersuites);
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
 
@@ -164,13 +183,22 @@ int TlsWiFiClient::read() {
 }
 
 int TlsWiFiClient::read(uint8_t *buf, size_t size) {
-  if (!_ok || !_hsDone) return -1;
+  if (!_ok || !_hsDone) { Serial.printf("TLS-READ-SKIP: ok=%d hs=%d\n", _ok, _hsDone); return -1; }
+  int avail_before = mbedtls_ssl_get_bytes_avail(&_ssl);
   int r = mbedtls_ssl_read(&_ssl, buf, size);
   if (r < 0) {
-    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return -1;
+    if (r == MBEDTLS_ERR_SSL_WANT_READ) {
+      static unsigned long lastW = 0;
+      unsigned long now = millis();
+      if (now - lastW > 1000) { lastW = now; Serial.printf("TLS-WANT: avail=%d ok=%d hs=%d\n", avail_before, _ok, _hsDone); }
+      return -1;
+    }
+    if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) { Serial.printf("TLS-CLOSE\n"); return -1; }
+    Serial.printf("TLS-READ-ERR: -0x%x\n", -r);
     _ok = false;
     return -1;
   }
+  if (r > 0) Serial.printf("TLS-READ-OK: %d bytes [%02x]\n", r, buf[0]);
   return r;
 }
 
@@ -187,22 +215,16 @@ int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
   TlsWiFiClient *c = (TlsWiFiClient *)ctx;
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
   int r = c->_tcp->read(buf, len);
-  if (!c->_hsDone) {
-    if (r > 0) {
-      // Show first 64 bytes of ClientHello (first recv=header 0x16, second=body 0x01)
-      bool isHello = (buf[0] == 0x01) || (buf[0] == 0x16);
-      int show = isHello ? (r > 80 ? 80 : r) : (r > 16 ? 16 : r);
-      Serial.printf("TLS-RECV(ask=%d got=%d):", len, r);
+  Serial.printf("BR: ask=%d got=%d av=%d\n", len, r, c->_tcp->available());
+  if (r > 0) {
+    if (!c->_hsDone) {
+      int show = r > 80 ? 80 : r;
+      Serial.printf("BR-DATA:");
       for (int i = 0; i < show; i++) Serial.printf(" %02x", (unsigned)buf[i]);
-      if (r > show) Serial.printf(" ...");
       Serial.printf("\n");
-    } else if (r == 0) {
-      Serial.printf("TLS-RECV: WANT_READ (ask=%d)\n", len);
-    } else {
-      Serial.printf("TLS-RECV: EOF (ask=%d)\n", len);
     }
+    return r;
   }
-  if (r > 0) return r;
   if (r == 0) return MBEDTLS_ERR_SSL_WANT_READ;
   return MBEDTLS_ERR_SSL_CONN_EOF;
 }

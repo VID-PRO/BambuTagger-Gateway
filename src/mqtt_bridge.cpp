@@ -1,8 +1,8 @@
 #include "mqtt_bridge.h"
 #ifdef ESP32
 #include <ESPmDNS.h>
+#include <mbedtls/base64.h>
 #include "tls_client.h"
-#include "test_cert.h"
 #endif
 
 static char reportTopic[64];
@@ -10,29 +10,27 @@ static char requestTopic[64];
 static char localReportTopic[64];
 static char localRequestTopic[64];
 
-// Static PEM cert kept for web UI download page (informational only)
-static const char tls_cert_dl[] PROGMEM = R"KEY(
------BEGIN CERTIFICATE-----
-MIIDOTCCAiGgAwIBAgIJAN9wuTIhwnWsMA0GCSqGSIb3DQEBCwUAMEsxGDAWBgNV
-BAMMDzIyRThCSjVCMDkwMDY4NTEiMCAGA1UECgwZQkJMIFRlY2hub2xvZ2llcyBD
-by4sIEx0ZDELMAkGA1UEBhMCQ04wHhcNMjYwNjI2MTU0MzM4WhcNMzYwNjIzMTU0
-MzM4WjBLMRgwFgYDVQQDDA8yMkU4Qko1QjA5MDA2ODUxIjAgBgNVBAoMGUJCTCBU
-ZWNobm9sb2dpZXMgQ28uLCBMdGQxCzAJBgNVBAYTAkNOMIIBIjANBgkqhkiG9w0B
-AQEFAAOCAQ8AMIIBCgKCAQEAn6794IYPNA0lL5w5H/o5Xd0wlw/IRBPNFnPAGNY6
-c/XB/P5gre60vLd7GW+4AQcgJ1RSnwCO6d+g3cpyUSR74cKj1I+Nnr/bfjzZ7tWx
-we6j3iv9E8UWFFP7GTX5TJ5YedVhJg0tPARJqx/HNJwjWFlX2ET4ukzWDIOMWKhh
-Kk1M6PUVrFuOE/ujU5cpiaRWTNh2k+zsmLBSNF0QJrum0BvETi+McdEpZGHy51Lp
-lCy58JQz2b7sAAe7MFnhKw9HksjdCseBjI2TB8dvkYhptW1DtFDEZWv8b9dQ5VOD
-myguaef3/qnsGkvkC2julDPHFYHhtNqzxFJeDj9i4vsyTwIDAQABoyAwHjAMBgNV
-HRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIFoDANBgkqhkiG9w0BAQsFAAOCAQEARE1F
-XdC3BdUGRVKOm2AJ7uzTM2X4ca8iC7zUwCcn5PuQ0QxAnYQOa1n7Oh5EQbJeJEam
-wexkd3nJ7UU9T2yjIcaQRXO0ZBvc/mzC8ITNcVLftgHIsKzQGGQoKnCYwgebNdmh
-Jh3q6yYoYwKxpzqIGqzhJ0aVQQlTQvZjhxS98zcu7BE1PdhdaPzfW2lDlduqe6wN
-WgpvLObfrstZxbzdIeoK12HjrgAEbjnGiVSSVUlV/WV/guJpiUp+lJnxHRYd9m41
-PHsYZpbQZ4yyztwq6RZEffvQc3ptnlW647PvRDjS6maU+Q6ZwAMyIrbnZTXTlo5z
-n3Oz5NrOghaKbMs3uA==
------END CERTIFICATE-----
-)KEY";
+// DER to PEM conversion using mbedTLS base64
+static void derToPem(const uint8_t *der, size_t derLen, char *pem, size_t pemSize) {
+  size_t olen = 0;
+  mbedtls_base64_encode(NULL, 0, &olen, der, derLen);
+  size_t b64Len = (olen / 64) * 65 + olen + 128;
+  if (b64Len > pemSize) { pem[0] = 0; return; }
+  size_t outLen;
+  mbedtls_base64_encode((unsigned char *)pem, pemSize, &outLen, der, derLen);
+  // Re-wrap with 64-char lines and PEM headers
+  char tmp[3072];
+  size_t pos = 0;
+  pos += snprintf(tmp + pos, sizeof(tmp) - pos, "-----BEGIN CERTIFICATE-----\n");
+  for (size_t off = 0; off < outLen; off += 64) {
+    size_t chunk = (outLen - off > 64) ? 64 : (outLen - off);
+    memcpy(tmp + pos, pem + off, chunk); pos += chunk;
+    tmp[pos++] = '\n';
+  }
+  pos += snprintf(tmp + pos, sizeof(tmp) - pos, "-----END CERTIFICATE-----\n");
+  tmp[pos] = 0;
+  memcpy(pem, tmp, pos + 1);
+}
 
 MqttBridge::MqttBridge()
   : _localServer(MQTT_LOCAL_PORT), _tlsServer(MQTT_PRINTER_PORT),
@@ -80,15 +78,14 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   _localServer.begin();
   _localServer.setNoDelay(true);
 
-  // HACK: use openssl-generated cert+key for debugging
+  // Generate self-signed device cert for TLS server
 #ifdef ESP32
-  _certLen = test_cert_der_len;
-  _keyLen = test_key_der_len;
-  memcpy(_certDer, test_cert_der, _certLen);
-  memcpy(_keyDer, test_key_der, _keyLen);
-  Serial.printf("MQTT: using test cert (%d+%d bytes) first4=0x%02x%02x%02x%02x\n",
-                _certLen, _keyLen,
-                _certDer[0], _certDer[1], _certDer[2], _certDer[3]);
+  if (!generateCert(_cfg->printerSerial, _certDer, &_certLen, _keyDer, &_keyLen)) {
+    Serial.println("MQTT: cert generation failed!");
+  } else {
+    derToPem(_certDer, _certLen, _certPem, sizeof(_certPem));
+    Serial.printf("MQTT: generated device cert (%d bytes) CN=%s\n", _certLen, _cfg->printerSerial);
+  }
 #endif
 
   // TLS server on port 8883 (Bambu Studio connects here with TLS)
@@ -98,7 +95,11 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 }
 
 const char *MqttBridge::getTlsCert() {
-  return tls_cert_dl;
+#ifdef ESP32
+  if (_certPem[0]) return _certPem;
+#endif
+  return "-----BEGIN CERTIFICATE-----\n"
+         "-----END CERTIFICATE-----\n";
 }
 
 void MqttBridge::loop() {
@@ -124,7 +125,7 @@ void MqttBridge::loop() {
     _pubsub.loop();
   }
 
-  while (acceptClient() >= 0) {}
+  acceptClient();
 
   static unsigned long lastDiag = 0;
   unsigned long now = millis();
@@ -292,13 +293,7 @@ int MqttBridge::acceptClient() {
   WiFiClient *rawPtr = new WiFiClient(_tlsServer.accept());
   if (rawPtr && *rawPtr) {
     TlsWiFiClient *tls = new TlsWiFiClient();
-    Serial.printf("MQTT: cert at conn first4=0x%02x%02x%02x%02x len=%d keyLen=%d\n",
-                  _certDer[0], _certDer[1], _certDer[2], _certDer[3], _certLen, _keyLen);
-    Serial.print("CERT_FULL:");
-    for (int i = 0; i < _certLen; i++) {
-      Serial.printf("%02x", _certDer[i]);
-    }
-    Serial.println();
+    Serial.printf("MQTT: TLS accept cert len=%d keyLen=%d\n", _certLen, _keyLen);
     bool ok = _certLen > 0 && tls->beginDer(rawPtr, _certDer, _certLen, _keyDer, _keyLen);
     if (ok) {
       // Start non-blocking TLS handshake; may return 0 (WANT_READ/WANT_WRITE)
@@ -384,14 +379,17 @@ void MqttBridge::handleClient(int idx) {
       TlsWiFiClient *tls = static_cast<TlsWiFiClient*>(&c);
       int av = tls->available();
       int conn = tls->connected();
-      if (av > 0) {
-        uint8_t dump[64];
-        int n = tls->read(dump, sizeof(dump));
-        Serial.printf("MQTT: cl%d avail=%d tcp=%d rd=%d ", idx, av, conn, n);
-        for (int i = 0; i < n && i < 32; i++) Serial.printf("%02x ", dump[i]);
-        Serial.println();
+      if (av > 0 || conn) {
+        // readByte got nothing — log state briefly
+        static unsigned long lastLog = 0;
+        unsigned long now = millis();
+        if (now - lastLog > 3000) {
+          lastLog = now;
+          Serial.printf("MQTT: cl%d TLS poll avail=%d conn=%d ok=%d hs=%d\n", idx, av, conn,
+            (bool)(*tls), tls->handshakeDone());
+        }
       } else {
-        Serial.printf("MQTT: cl%d no data (avail=%d tcp=%d)\n", idx, av, conn);
+        Serial.printf("MQTT: cl%d disconnected (avail=%d tcp=%d)\n", idx, av, conn);
       }
     }
 #endif

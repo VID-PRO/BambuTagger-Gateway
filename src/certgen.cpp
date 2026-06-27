@@ -129,32 +129,35 @@ bool generateCert(const char *cn, uint8_t *certDer, size_t *certLen,
     size_t countryLen = strlen(country);
     size_t len = 0;
 
-    // 7) SubjectPublicKeyInfo
-    int spkiLen = mbedtls_pk_write_pubkey_der(&pk, tbs, sizeof(tbs));
-    if (spkiLen <= 0) break;
-    p = tbs + sizeof(tbs) - spkiLen;
-    len = spkiLen;
-
-    // 6b) Extensions: [3] { SEQUENCE { BasicConstraints, KeyUsage } }
+    // 7) Extensions: [3] { SEQUENCE { BasicConstraints, KeyUsage } }
+    // Written FIRST (rightmost) since all mbedtls_asn1_write_* prepend.
     {
-      size_t extBefore = len;
-      // Key Usage (critical) = BIT STRING { digitalSignature, keyEncipherment }
+      size_t extBefore = 0;
       uint8_t keyUsageVal[] = { 0x03, 0x02, 0x05, 0xA0 };
-      MBEDTLS_ASN1_CHK_ADD(len, writeExtension(&p, tbs, len,
+      MBEDTLS_ASN1_CHK_ADD(extBefore, writeExtension(&p, tbs, extBefore,
                            MBEDTLS_OID_KEY_USAGE, strlen(MBEDTLS_OID_KEY_USAGE),
                            1, keyUsageVal, sizeof(keyUsageVal)));
-      // Basic Constraints (critical) = SEQUENCE {} (CA:FALSE)
       uint8_t basicConVal[] = { 0x30, 0x00 };
-      MBEDTLS_ASN1_CHK_ADD(len, writeExtension(&p, tbs, len,
+      MBEDTLS_ASN1_CHK_ADD(extBefore, writeExtension(&p, tbs, extBefore,
                            MBEDTLS_OID_BASIC_CONSTRAINTS, strlen(MBEDTLS_OID_BASIC_CONSTRAINTS),
                            1, basicConVal, sizeof(basicConVal)));
-      // Extensions SEQUENCE
-      MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_len(&p, tbs, len - extBefore));
-      MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_tag(&p, tbs,
+      MBEDTLS_ASN1_CHK_ADD(extBefore, mbedtls_asn1_write_len(&p, tbs, extBefore));
+      MBEDTLS_ASN1_CHK_ADD(extBefore, mbedtls_asn1_write_tag(&p, tbs,
                            MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE));
-      // [3] EXPLICIT
-      MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_len(&p, tbs, len - extBefore));
-      MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_tag(&p, tbs, 0xA3));
+      MBEDTLS_ASN1_CHK_ADD(extBefore, mbedtls_asn1_write_len(&p, tbs, extBefore));
+      MBEDTLS_ASN1_CHK_ADD(extBefore, mbedtls_asn1_write_tag(&p, tbs, 0xA3));
+      len = extBefore;
+    }
+
+    // 7b) SubjectPublicKeyInfo — prepend just before Extensions (field 7 in TBS order)
+    {
+      uint8_t spkiBuf[1024];
+      int spkiLen = mbedtls_pk_write_pubkey_der(&pk, spkiBuf, sizeof(spkiBuf));
+      if (spkiLen <= 0) break;
+      size_t spkiLenU = spkiLen;
+      p -= spkiLenU;
+      memmove(p, spkiBuf + sizeof(spkiBuf) - spkiLenU, spkiLenU);
+      len += spkiLenU;
     }
 
     // 6) Subject Name

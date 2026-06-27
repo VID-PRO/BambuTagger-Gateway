@@ -155,10 +155,10 @@ Changing the EEPROM layout (magic number) clears saved settings; re-enter them v
 
 ### MQTT
 
-| Parameter | Gateway Value (plain) | Gateway Value (Bambu Studio) |
-|---|---|---|
+| Parameter | Gateway Value (plain) | Gateway Value (Bambu Studio / TLS) |
+|---|---|---|---|
 | Broker | Gateway AP IP (`192.168.4.1`) | Same |
-| Port | `1883` (plain TCP) | `8883` (plain TCP — TLS server not implemented on ESP32-S3; see Limitations) |
+| Port | `1883` (plain TCP) | `8883` (TLS with mbedTLS — see Certificates) |
 | Username | (none) | `bblp` (embedded in Bambu Studio) |
 | Password | (none) | Printer access code |
 | Subscribe | Any topic — the bridge forwards matching printer reports | `device/<SERIAL>/report` (auto-detected) |
@@ -204,7 +204,7 @@ BambuTagger-Gateway/
 The MQTT bridge is the core component. It:
 
 1. **Connects upstream** to the printer's MQTT broker (port 8883) over **TLS** (`WiFiClientSecure` with `setInsecure()`) as a single client using `PubSubClient`
-2. **Listens locally** on port 1883 (plain TCP) **and** port 8883 (plain TCP — no TLS server on ESP32-S3; self-signed cert kept for future mbedTLS implementation) for MQTT connections
+2. **Listens locally** on port 1883 (plain TCP) **and** port 8883 (TLS with mbedTLS using a CA-signed certificate chain) for MQTT connections
 3. **Parses incoming MQTT packets** (CONNECT, SUBSCRIBE, UNSUBSCRIBE, PUBLISH, PINGREQ, DISCONNECT) and responds appropriately
 4. **Tracks subscriptions** per local client, including wildcard topics (`#`, `+`)
 5. **Routes upstream messages** — when the printer publishes a report, the bridge matches all local client subscriptions and forwards the message
@@ -224,6 +224,33 @@ The MQTT bridge is the core component. It:
 
 ---
 
+## Certificates
+
+The gateway presents a **self-signed** TLS certificate on port 8883 (generated
+at startup). Bambu Studio and OrcaSlicer verify printer TLS connections against
+their bundled `printer.cer` trust store — they do **not** use the system
+certificate store.
+
+To trust the gateway, append its certificate to that file (keep the existing
+content so real printers still work):
+
+**macOS:**
+```bash
+sudo bash -c 'cat ~/Downloads/gateway-ca.pem >> /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer'
+```
+OrcaSlicer: `/Applications/OrcaSlicer.app/Contents/Resources/cert/printer.cer`
+
+**Windows:**
+Open `C:\Program Files\Bambu Studio\resources\cert\printer.cer` as Administrator
+in Notepad, paste the gateway certificate at the end, save, and restart the slicer.
+
+OrcaSlicer: `C:\Program Files\OrcaSlicer\resources\cert\printer.cer`
+
+Download the gateway certificate from the web UI at
+`http://192.168.4.1/cert?dl=1` (or visit the `/cert` page).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -235,7 +262,7 @@ The MQTT bridge is the core component. It:
 | FTPS not working | FTPS requires TLS which the TCP proxy does not terminate — use raw FTP or MQTT for file ops |
 | `DNS Failed for ...` in serial | ESP32-S3 doesn't resolve `.local` mDNS names via normal DNS — the gateway handles this via `MDNS.queryHost()` once station WiFi connects |
 | LED stays on / no blink | Gateway is booting; if stuck, check serial output for errors |
-| Bambu Studio can't connect | Connect via LAN to the gateway's IP; use the printer model/serial from the Printer web page (set these first). The gateway advertises via mDNS (`_bambu._tcp`) and accepts plain TCP on port 8883. Note: ESP32-S3 does not support TLS server — Bambu Studio may refuse plain TCP; if so, use the gateway's `1883` port and configure Bambu Studio to connect without TLS (or install the self-signed cert from the `/cert` page — see Limitations). |
+| Bambu Studio can't connect | Connect via LAN to the gateway's IP; use the printer model/serial from the Printer web page (set these first). The gateway advertises via mDNS (`_bambu._tcp`) and accepts TLS on port 8883. Download the gateway certificate from the `/cert` page and append it to the slicer's `printer.cer` (see Certificates below). |
 
 ---
 
@@ -243,7 +270,7 @@ The MQTT bridge is the core component. It:
 
 - **FTPS**: The TCP proxy forwards raw TCP bytes only. FTPS (FTP over TLS) requires TLS termination which is not implemented. For file operations, use the printer's MQTT API instead.
 - **Camera**: The proxy assumes a plain TCP stream (e.g., MJPEG). If your printer uses a different protocol, adjust accordingly.
-- **Security**: Local MQTT on port 1883 is plain TCP (no TLS). Bambu Studio connects via TLS on port 8883 with a self-signed certificate. ESP32-S3 lacks `BearSSL::WiFiServerSecure`, so port 8883 also uses plain TCP — Bambu Studio will reject it without installing the self-signed CA cert from the `/cert` page (import into slicer's bundled CA store). The gateway is designed for isolated/trusted networks.
+- **Security**: Local MQTT on port 1883 is plain TCP (no TLS). Bambu Studio connects via TLS on port 8883 using mbedTLS with a self-signed certificate. Before connecting, download the gateway certificate from the `/cert` page and append it to the slicer's `printer.cer` (see Certificates below). The gateway is designed for isolated/trusted networks.
 - **mDNS resolution**: ESP32-S3's `WiFi.hostByName()` does not resolve `.local` mDNS names. The gateway uses `MDNS.queryHost()` after station WiFi connects — resolution takes ~3 seconds per attempt.
 
 ---

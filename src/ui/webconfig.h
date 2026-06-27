@@ -3,6 +3,9 @@
 #include <EEPROM.h>
 #include "config.h"
 
+class MqttBridge;
+extern MqttBridge mqtt;
+
 #ifdef ESP32
 #include <WiFi.h>
 #include <WebServer.h>
@@ -598,16 +601,15 @@ static const char _PAGE_CERT2[] PROGMEM = R"html(
 <div class="card" style="max-width:560px">
   <h2>TLS Certificate</h2>
   <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
-    Bambu Studio and OrcaSlicer verify the TLS certificate presented
-    by the printer against their bundled BBL CA. Because this gateway
-    uses a self-signed certificate, you must import it into the
-    slicer before you can connect via LAN (port 8883).
+    This gateway presents a <strong>self-signed</strong> TLS certificate
+    on port 8883. Bambu Studio and OrcaSlicer verify printer certificates
+    against their bundled <code>printer.cer</code> — they do
+    <strong>not</strong> use the system certificate store.
   </p>
   <p style="margin:0 0 12px;font-size:13px;line-height:1.5">
-    Bambu Studio and OrcaSlicer verify the TLS certificate against a
-    bundled <code>printer.cer</code> file — they do <strong>not</strong>
-    use the system certificate store. To trust this gateway, append the
-    downloaded cert to that file:<br><br>
+    To trust this gateway, <strong>append</strong> the downloaded
+    certificate to the slicer's <code>printer.cer</code> file (keep the
+    existing content so real printers still work):<br><br>
     <strong>macOS</strong>:<br>
     <code style="font-size:11px">sudo bash -c 'cat ~/Downloads/gateway-ca.pem &gt;&gt; /Applications/BambuStudio.app/Contents/Resources/cert/printer.cer'</code><br>
     <small>(OrcaSlicer: <code style="font-size:11px">/Applications/OrcaSlicer.app/Contents/Resources/cert/printer.cer</code>)</small><br><br>
@@ -637,10 +639,10 @@ static void handleCert() {
     _server.send(200, "text/html", page);
     return;
   }
-  const char *pem = MqttBridge::getTlsCert();
+  const char *pem = mqtt.getTlsCert();
   _server.sendHeader("Content-Disposition",
                       "attachment; filename=gateway-ca.pem");
-  _server.send_P(200, "application/x-pem-file", pem, strlen_P(pem));
+  _server.send(200, "application/x-pem-file", pem);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
