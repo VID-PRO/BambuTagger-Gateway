@@ -88,7 +88,8 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 #ifdef ESP32
   {
     // Free up old NVS namespaces
-    for (const char *ns : {"mqttgate", "mqttg2", "mqttg3", "mqttg4", "mqttg5", "mqttg6", "mqttg7", "mqttg8", "mqttg9", "mqttg10", "mqttg11", "mqttg12", "mqttg13", "mqttg14", "mqttg15", "mqttg16", "mqttg17", "mqttg18", "mqttg19", "mqttg20", "mqttg21", "mqttg22", "mqttg23", "mqttg24", "mqttg25"}) {
+    // Clear legacy NVS namespaces — intentionally excludes "mqttg25" (current)
+    for (const char *ns : {"mqttgate", "mqttg2", "mqttg3", "mqttg4", "mqttg5", "mqttg6", "mqttg7", "mqttg8", "mqttg9", "mqttg10", "mqttg11", "mqttg12", "mqttg13", "mqttg14", "mqttg15", "mqttg16", "mqttg17", "mqttg18", "mqttg19", "mqttg20", "mqttg21", "mqttg22", "mqttg23", "mqttg24"}) {
       Preferences oldPrefs;
       oldPrefs.begin(ns, false);
       oldPrefs.clear();
@@ -96,7 +97,8 @@ void MqttBridge::begin(GatewayConfig *cfg) {
     }
 
     Preferences prefs;
-            prefs.begin("mqttg24", false);
+            prefs.begin("mqttg25", false);
+    _certLen = prefs.getBytes("certDer", _certDer, sizeof(_certDer));
     _keyLen = prefs.getBytes("keyDer", _keyDer, sizeof(_keyDer));
     _caLen = prefs.getBytes("caDer", _caDer, sizeof(_caDer));
     bool loaded = (_certLen > 0 && _keyLen > 0 && _caLen > 0);
@@ -117,7 +119,7 @@ void MqttBridge::begin(GatewayConfig *cfg) {
                               ipBytes)) {
         Serial.println("MQTT: cert generation failed!");
       } else {
-        prefs.begin("mqttg24", false);
+        prefs.begin("mqttg25", false);
         prefs.putBytes("certDer", _certDer, _certLen);
         prefs.putBytes("keyDer", _keyDer, _keyLen);
         prefs.putBytes("caDer", _caDer, _caLen);

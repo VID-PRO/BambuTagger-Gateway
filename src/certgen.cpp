@@ -15,7 +15,7 @@
 #define OID_BAMBU_1_4   "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x04"
 #define OID_BAMBU_1_999 "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x87\x67"
 
-#define CA_SUBJECT "CN=Virtual Printer CA,O=BBL Technologies Co. Ltd,C=CN"
+#define CA_SUBJECT "CN=BBL Device CA N7-V2"  // must match real Bambu root name
 
 static int addBambuExtensions(mbedtls_x509write_cert *crt) {
   int ret;
@@ -150,7 +150,7 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
 
     // ── Build device certificate (signed by CA) ──
     char subjStr[256];
-    snprintf(subjStr, sizeof(subjStr), "CN=%s,O=BBL Technologies Co. Ltd,C=CN", cn);
+    snprintf(subjStr, sizeof(subjStr), "CN=%s", cn);  // real printer certs are CN-only
 
     mbedtls_x509write_crt_set_subject_key(&devCrt, &devKey);
     mbedtls_x509write_crt_set_issuer_key(&devCrt, &caKey);

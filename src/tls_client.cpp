@@ -235,8 +235,10 @@ int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
   int r = c->_tcp->read(buf, len);
   if (r > 0) return r;
-  if (r == 0) return MBEDTLS_ERR_SSL_WANT_READ;
-  return MBEDTLS_ERR_SSL_CONN_EOF;
+  // WiFiClient::read() returns -1 (or 0) when the buffer is empty — not an
+  // error.  Only return CONN_EOF if the TCP connection has actually closed.
+  if (!c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
+  return MBEDTLS_ERR_SSL_WANT_READ;
 }
 
 int TlsWiFiClient::bio_send(void *ctx, const unsigned char *buf, size_t len) {
