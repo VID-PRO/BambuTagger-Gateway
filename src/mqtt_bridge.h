@@ -11,6 +11,7 @@
 #include "config.h"
 #ifdef ESP32
 #include "certgen.h"
+#include "tls_client.h"
 #endif
 
 struct MqttSub {
@@ -42,21 +43,31 @@ public:
 
   // TLS certificate PEM (for web UI download)
   const char *getTlsCert();
+  const uint8_t *getCertDer() const { return _certDer; }
+  size_t getCertLen() const { return _certLen; }
+  const uint8_t *getKeyDer() const { return _keyDer; }
+  size_t getKeyLen() const { return _keyLen; }
+  const uint8_t *getCaDer() const { return _caDer; }
+  size_t getCaLen() const { return _caLen; }
 
 private:
   WiFiClientSecure *_upTcp = nullptr;
   PubSubClient _pubsub;
   WiFiServer _localServer;
+  WiFiServer _tlsServer;
   MqttClientCtx _clients[MAX_MQTT_CLIENTS];
   unsigned long _lastReconnect;
   GatewayConfig *_cfg;
 
 #ifdef ESP32
-  uint8_t _certDer[2048];
-  uint8_t _keyDer[2048];
+  uint8_t _certDer[3072];  // concatenated server + CA DER chain
+  uint8_t _keyDer[2048];   // server private key DER
+  uint8_t _caDer[2048];    // CA cert DER (for printer.cer)
   size_t _certLen = 0;
   size_t _keyLen = 0;
-  char _certPem[3072];
+  size_t _caLen = 0;
+  char _certPem[4096];     // chain PEM
+  char _caPem[3072];       // CA PEM (for /ca.pem / printer.cer)
 #endif
 
   // upstream

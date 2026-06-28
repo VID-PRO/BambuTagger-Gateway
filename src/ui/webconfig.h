@@ -628,6 +628,12 @@ static void handleCert() {
   _server.send(200, "text/html", page);
 }
 
+// ── CA certificate download ────────────────────────────────────────────
+
+static void handleCaPem() {
+  _server.send(200, "application/x-pem-file", mqtt.getTlsCert());
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 
 inline void webconfigInit() {
@@ -638,6 +644,7 @@ inline void webconfigBegin() {
   _server.on("/", handleRoot);
   _server.on("/Logo/bambutagger.png", handleLogo);
   _server.on("/cert", handleCert);
+  _server.on("/ca.pem", handleCaPem);
   _server.on("/config", []() {
     _server.sendHeader("Location", "/config/settings", true);
     _server.send(302, "text/plain", "");

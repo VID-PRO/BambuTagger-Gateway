@@ -2,6 +2,7 @@
 #ifdef ESP32
 #include <ESPmDNS.h>
 #include <mbedtls/base64.h>
+#include <Preferences.h>
 #endif
 
 static char reportTopic[64];
@@ -33,6 +34,7 @@ static void derToPem(const uint8_t *der, size_t derLen, char *pem, size_t pemSiz
 
 MqttBridge::MqttBridge()
   : _localServer(MQTT_LOCAL_PORT),
+    _tlsServer(MQTT_PRINTER_PORT),
     _lastReconnect(0), _cfg(nullptr) {
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     _clients[i].active = false;
@@ -60,7 +62,11 @@ void MqttBridge::rebind() {
   _localServer.begin();
   _localServer.setNoDelay(true);
   WiFiClient drain = _localServer.accept();
-  Serial.println("MQTT: server rebound (drained)");
+  _tlsServer.close();
+  _tlsServer.begin();
+  _tlsServer.setNoDelay(true);
+  WiFiClient drainTls = _tlsServer.accept();
+  Serial.println("MQTT: servers rebound (drained)");
 }
 
 void MqttBridge::begin(GatewayConfig *cfg) {
@@ -75,13 +81,56 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   _localServer.begin();
   _localServer.setNoDelay(true);
 
-  // Generate self-signed device cert for TLS server
+  _tlsServer.begin();
+  _tlsServer.setNoDelay(true);
+
+  // Generate or load self-signed device cert for TLS server (CA=FALSE, EKU+SAN)
 #ifdef ESP32
-  if (!generateCert(_cfg->printerSerial, _certDer, &_certLen, _keyDer, &_keyLen)) {
-    Serial.println("MQTT: cert generation failed!");
-  } else {
+  {
+    // Free up old NVS namespaces
+    for (const char *ns : {"mqttgate", "mqttg2", "mqttg3", "mqttg4", "mqttg5", "mqttg6", "mqttg7", "mqttg8", "mqttg9", "mqttg10", "mqttg11", "mqttg12", "mqttg13", "mqttg14", "mqttg15", "mqttg16", "mqttg17", "mqttg18", "mqttg19", "mqttg20", "mqttg21", "mqttg22", "mqttg23", "mqttg24", "mqttg25"}) {
+      Preferences oldPrefs;
+      oldPrefs.begin(ns, false);
+      oldPrefs.clear();
+      oldPrefs.end();
+    }
+
+    Preferences prefs;
+            prefs.begin("mqttg24", false);
+    _keyLen = prefs.getBytes("keyDer", _keyDer, sizeof(_keyDer));
+    _caLen = prefs.getBytes("caDer", _caDer, sizeof(_caDer));
+    bool loaded = (_certLen > 0 && _keyLen > 0 && _caLen > 0);
+    prefs.end();
+
+    if (!loaded) {
+      // Wait for STA IP if station mode is configured
+      if (strlen(_cfg->stationSsid) > 0) {
+        unsigned long start = millis();
+        while (!WiFi.isConnected() && millis() - start < 15000) delay(100);
+      }
+      IPAddress localIP = WiFi.isConnected() ? WiFi.localIP() : WiFi.softAPIP();
+      Serial.printf("MQTT: generating cert with IP %s\n", localIP.toString().c_str());
+      uint8_t ipBytes[4] = { localIP[0], localIP[1], localIP[2], localIP[3] };
+      if (!generateCertChain(_cfg->gatewaySerial, _certDer, &_certLen,
+                              _keyDer, &_keyLen,
+                              _caDer, &_caLen,
+                              ipBytes)) {
+        Serial.println("MQTT: cert generation failed!");
+      } else {
+        prefs.begin("mqttg24", false);
+        prefs.putBytes("certDer", _certDer, _certLen);
+        prefs.putBytes("keyDer", _keyDer, _keyLen);
+        prefs.putBytes("caDer", _caDer, _caLen);
+        prefs.end();
+        Serial.printf("MQTT: generated & saved cert chain (%d bytes) + CA (%d bytes) SN=%s\n",
+                      _certLen, _caLen, _cfg->gatewaySerial);
+      }
+    } else {
+      Serial.printf("MQTT: loaded cert chain from flash (%d bytes) + CA (%d bytes) SN=%s\n",
+                    _certLen, _caLen, _cfg->gatewaySerial);
+    }
     derToPem(_certDer, _certLen, _certPem, sizeof(_certPem));
-    Serial.printf("MQTT: generated device cert (%d bytes) CN=%s\n", _certLen, _cfg->printerSerial);
+    derToPem(_caDer, _caLen, _caPem, sizeof(_caPem));
   }
 #endif
 
@@ -90,7 +139,7 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 
 const char *MqttBridge::getTlsCert() {
 #ifdef ESP32
-  if (_certPem[0]) return _certPem;
+  if (_caPem[0]) return _caPem;
 #endif
   return "-----BEGIN CERTIFICATE-----\n"
          "-----END CERTIFICATE-----\n";
@@ -137,6 +186,23 @@ void MqttBridge::loop() {
 
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) continue;
+
+    // Continue TLS handshake for pending clients
+    if (_clients[i].isTls) {
+      TlsWiFiClient *tls = (TlsWiFiClient *)_clients[i].client;
+      if (!tls->handshakeDone()) {
+        int hs = tls->continueHandshake();
+        if (hs == 0) continue;   // still handshaking
+        if (hs < 0) {            // handshake failed
+          Serial.printf("MQTT: TLS handshake failed for client %d\n", i);
+          disconnectClient(i);
+          continue;
+        }
+        Serial.printf("MQTT: TLS handshake done for client %d\n", i);
+        // Fall through to handle MQTT once handshake completes
+      }
+    }
+
     if (!_clients[i].client->connected()) {
       disconnectClient(i);
       continue;
@@ -195,8 +261,8 @@ bool MqttBridge::connectUpstream() {
   char willTopic[64];
   snprintf(willTopic, sizeof(willTopic), "device/%s/status", _cfg->printerSerial);
 
-  char clientId[32];
-  snprintf(clientId, sizeof(clientId), "%s", _cfg->printerSerial);
+  char clientId[48];
+  snprintf(clientId, sizeof(clientId), "BambuTagger-%s", _cfg->printerSerial);
 
   bool ok = _pubsub.connect(clientId, "bblp", _cfg->printerCode,
                             willTopic, 1, true, "offline");
@@ -260,31 +326,67 @@ void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int l
 // downstream client management
 // ------------------------------------------------------------------
 int MqttBridge::acceptClient() {
-  WiFiClient plain = _localServer.accept();
-  if (!plain) return -1;
+  // Try TLS server (port 8883) first
+  {
+    WiFiClient raw = _tlsServer.accept();
+    if (raw) {
+      if (!raw.connected()) { raw.stop(); return -1; }
+      raw.setNoDelay(true);
 
-  WiFiClient *c = new WiFiClient(plain);
-  if (!c || !c->connected()) {
-    delete c;
-    return -1;
-  }
-  c->setNoDelay(true);
-  Serial.printf("MQTT: client from %s\n", c->remoteIP().toString().c_str());
+      WiFiClient *rawTcp = new WiFiClient(raw);
+      TlsWiFiClient *tls = new TlsWiFiClient();
+      if (!tls->beginDer(rawTcp, _certDer, _certLen, _keyDer, _keyLen)) {
+        Serial.println("MQTT: TLS beginDer failed");
+        delete tls;  // ~TlsWiFiClient deletes rawTcp
+        return -1;
+      }
 
-  for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
-    if (!_clients[i].active) {
-      _clients[i].client = c;
-      _clients[i].active = true;
-      _clients[i].isTls = false;
-      _clients[i].subCount = 0;
-      _clients[i].lastPid = 0;
-      _clients[i].lastActivity = millis();
-      return i;
+      for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
+        if (!_clients[i].active) {
+          _clients[i].client = tls;
+          _clients[i].active = true;
+          _clients[i].isTls = true;
+          _clients[i].subCount = 0;
+          _clients[i].lastPid = 0;
+          _clients[i].lastActivity = millis();
+          Serial.printf("MQTT: TLS client %d from %s\n", i, raw.remoteIP().toString().c_str());
+          return i;
+        }
+      }
+      // No slots — clean up
+      delete tls;  // ~TlsWiFiClient handles all cleanup
+      return -2;
     }
   }
-  c->stop();
-  delete c;
-  return -2;
+
+  // Try plain server (port 1883)
+  {
+    WiFiClient plain = _localServer.accept();
+    if (!plain) return -1;
+
+    WiFiClient *c = new WiFiClient(plain);
+    if (!c || !c->connected()) {
+      delete c;
+      return -1;
+    }
+    c->setNoDelay(true);
+    Serial.printf("MQTT: plain client from %s\n", c->remoteIP().toString().c_str());
+
+    for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
+      if (!_clients[i].active) {
+        _clients[i].client = c;
+        _clients[i].active = true;
+        _clients[i].isTls = false;
+        _clients[i].subCount = 0;
+        _clients[i].lastPid = 0;
+        _clients[i].lastActivity = millis();
+        return i;
+      }
+    }
+    c->stop();
+    delete c;
+    return -2;
+  }
 }
 
 void MqttBridge::disconnectClient(int idx) {
@@ -308,6 +410,8 @@ void MqttBridge::handleClient(int idx) {
 
   uint8_t header;
   if (!readByte(c, header)) {
+    Serial.printf("MQTT: client %d read failed, disconnecting\n", idx);
+    disconnectClient(idx);
     return;
   }
   cl.lastActivity = millis();

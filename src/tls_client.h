@@ -41,6 +41,7 @@ private:
   bool _hsDone = false;
   int _hsRetries = 0;
   unsigned long _hsStart = 0;
+  int _hsState = 0;
   mbedtls_ssl_context _ssl;
   mbedtls_ssl_config _conf;
   mbedtls_x509_crt _cert;

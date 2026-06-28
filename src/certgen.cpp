@@ -4,27 +4,93 @@
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
+#include <mbedtls/pem.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-// Bambu custom OIDs: 1.3.6.1.4.1.39859.x (DER-encoded)
 #define OID_BAMBU_1     "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01"
 #define OID_BAMBU_2     "\x2B\x06\x01\x04\x01\x82\xB7\x33\x02"
 #define OID_BAMBU_1_3   "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x03"
 #define OID_BAMBU_1_4   "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x04"
 #define OID_BAMBU_1_999 "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x87\x67"
 
-bool generateCert(const char *cn, uint8_t *certDer, size_t *certLen,
-                  uint8_t *keyDer, size_t *keyLen) {
-  mbedtls_pk_context key;
-  mbedtls_x509write_cert crt;
+#define CA_SUBJECT "CN=Virtual Printer CA,O=BBL Technologies Co. Ltd,C=CN"
+
+static int addBambuExtensions(mbedtls_x509write_cert *crt) {
+  int ret;
+  static const uint8_t v1_val[] = { 0x0C, 0x02, 0x76, 0x31 };
+  ret = mbedtls_x509write_crt_set_extension(crt,
+    OID_BAMBU_1, sizeof(OID_BAMBU_1) - 1, 0, v1_val, sizeof(v1_val));
+  if (ret) return ret;
+
+  static const uint8_t false_val[] = { 0x0C, 0x05, 0x66, 0x61, 0x6C, 0x73, 0x65 };
+  ret = mbedtls_x509write_crt_set_extension(crt,
+    OID_BAMBU_2, sizeof(OID_BAMBU_2) - 1, 0, false_val, sizeof(false_val));
+  if (ret) return ret;
+
+  static const uint8_t printer_val[] = { 0x0C, 0x07, 0x50, 0x72, 0x69, 0x6E, 0x74, 0x65, 0x72 };
+  ret = mbedtls_x509write_crt_set_extension(crt,
+    OID_BAMBU_1_3, sizeof(OID_BAMBU_1_3) - 1, 0, printer_val, sizeof(printer_val));
+  if (ret) return ret;
+
+  static const uint8_t n7v2_val[] = { 0x0C, 0x05, 0x4E, 0x37, 0x2D, 0x56, 0x32 };
+  ret = mbedtls_x509write_crt_set_extension(crt,
+    OID_BAMBU_1_4, sizeof(OID_BAMBU_1_4) - 1, 0, n7v2_val, sizeof(n7v2_val));
+  if (ret) return ret;
+
+  static const uint8_t int0_val[] = { 0x02, 0x01, 0x00 };
+  ret = mbedtls_x509write_crt_set_extension(crt,
+    OID_BAMBU_1_999, sizeof(OID_BAMBU_1_999) - 1, 0, int0_val, sizeof(int0_val));
+  return ret;
+}
+
+static int writeDer(mbedtls_x509write_cert *crt, mbedtls_ctr_drbg_context *drbg,
+                    uint8_t *out, size_t outSize, size_t *outLen) {
+  uint8_t *buf = (uint8_t *)malloc(outSize);
+  if (!buf) return -1;
+  int len = mbedtls_x509write_crt_der(crt, buf, outSize,
+                                       mbedtls_ctr_drbg_random, drbg);
+  if (len <= 0) { free(buf); return len; }
+  memcpy(out, buf + outSize - len, len);
+  *outLen = len;
+  free(buf);
+  return 0;
+}
+
+static int genRsaKey(mbedtls_pk_context *pk, mbedtls_ctr_drbg_context *drbg) {
+  int ret = mbedtls_pk_setup(pk, mbedtls_pk_info_from_type(MBEDTLS_PK_RSA));
+  if (ret) return ret;
+  mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*pk);
+  return mbedtls_rsa_gen_key(rsa, mbedtls_ctr_drbg_random, drbg, 2048, 65537);
+}
+
+static int writeKeyDer(mbedtls_pk_context *pk, uint8_t *out, size_t outSize, size_t *outLen) {
+  uint8_t *buf = (uint8_t *)malloc(outSize);
+  if (!buf) return -1;
+  int wr = mbedtls_pk_write_key_der(pk, buf, outSize);
+  if (wr <= 0) { free(buf); return wr; }
+  memcpy(out, buf + outSize - wr, wr);
+  *outLen = wr;
+  free(buf);
+  return 0;
+}
+
+bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
+                       uint8_t *keyDer, size_t *keyLen,
+                       uint8_t *caDer, size_t *caLen,
+                       const uint8_t *ip) {
+  mbedtls_pk_context caKey, devKey;
+  mbedtls_x509write_cert caCrt, devCrt;
   mbedtls_ctr_drbg_context drbg;
   mbedtls_entropy_context entropy;
   int ret;
   bool ok = false;
 
-  mbedtls_pk_init(&key);
-  mbedtls_x509write_crt_init(&crt);
+  mbedtls_pk_init(&caKey);
+  mbedtls_pk_init(&devKey);
+  mbedtls_x509write_crt_init(&caCrt);
+  mbedtls_x509write_crt_init(&devCrt);
   mbedtls_ctr_drbg_init(&drbg);
   mbedtls_entropy_init(&entropy);
 
@@ -32,100 +98,158 @@ bool generateCert(const char *cn, uint8_t *certDer, size_t *certLen,
     ret = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy, NULL, 0);
     if (ret) { printf("CERT: drbg seed failed -0x%x\n", -ret); break; }
 
-    ret = mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_RSA));
-    if (ret) { printf("CERT: pk setup failed -0x%x\n", -ret); break; }
+    // Generate CA key pair
+    ret = genRsaKey(&caKey, &drbg);
+    if (ret) { printf("CERT: CA key gen failed -0x%x\n", -ret); break; }
 
-    mbedtls_rsa_context *rsa = mbedtls_pk_rsa(key);
-    ret = mbedtls_rsa_gen_key(rsa, mbedtls_ctr_drbg_random, &drbg, 2048, 65537);
-    if (ret) { printf("CERT: rsa gen failed -0x%x\n", -ret); break; }
+    // Generate device key pair
+    ret = genRsaKey(&devKey, &drbg);
+    if (ret) { printf("CERT: dev key gen failed -0x%x\n", -ret); break; }
 
+    // Write device private key DER
     {
-      uint8_t keyTmp[2048];
-      int wr = mbedtls_pk_write_key_der(&key, keyTmp, sizeof(keyTmp));
-      if (wr <= 0) { printf("CERT: write key der failed %d\n", wr); break; }
-      memcpy(keyDer, keyTmp + sizeof(keyTmp) - wr, wr);
+      uint8_t *keyBuf = (uint8_t *)malloc(2048);
+      if (!keyBuf) { printf("CERT: OOM keyBuf\n"); break; }
+      int wr = mbedtls_pk_write_key_der(&devKey, keyBuf, 2048);
+      if (wr <= 0) { free(keyBuf); printf("CERT: write key der failed %d\n", wr); break; }
+      memcpy(keyDer, keyBuf + 2048 - wr, wr);
       *keyLen = wr;
+      free(keyBuf);
     }
 
-    mbedtls_x509write_crt_set_subject_key(&crt, &key);
-    mbedtls_x509write_crt_set_issuer_key(&crt, &key);
-    mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
-    mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
+    // ── Build CA certificate ──
+    mbedtls_x509write_crt_set_subject_key(&caCrt, &caKey);
+    mbedtls_x509write_crt_set_issuer_key(&caCrt, &caKey);
+    mbedtls_x509write_crt_set_md_alg(&caCrt, MBEDTLS_MD_SHA256);
+    mbedtls_x509write_crt_set_version(&caCrt, MBEDTLS_X509_CRT_VERSION_3);
 
-    {
-      mbedtls_mpi serial;
-      mbedtls_mpi_init(&serial);
-      mbedtls_mpi_lset(&serial, 1);
-      ret = mbedtls_x509write_crt_set_serial(&crt, &serial);
-      mbedtls_mpi_free(&serial);
-      if (ret) { printf("CERT: set serial failed -0x%x\n", -ret); break; }
-    }
+    { mbedtls_mpi s; mbedtls_mpi_init(&s); mbedtls_mpi_lset(&s, 1); ret = mbedtls_x509write_crt_set_serial(&caCrt, &s); mbedtls_mpi_free(&s); if (ret) break; }
 
-    ret = mbedtls_x509write_crt_set_validity(&crt, "20240101000000", "20350101000000");
-    if (ret) { printf("CERT: set validity failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_validity(&caCrt, "20200101000000", "20350101000000");
+    if (ret) { printf("CERT: CA validity failed -0x%x\n", -ret); break; }
 
-    char nameStr[256];
-    snprintf(nameStr, sizeof(nameStr),
-             "CN=%s,O=BBL Technologies Co. Ltd,C=CN", cn);
-    ret = mbedtls_x509write_crt_set_issuer_name(&crt, nameStr);
-    if (ret) { printf("CERT: set issuer name failed -0x%x\n", -ret); break; }
-    ret = mbedtls_x509write_crt_set_subject_name(&crt, nameStr);
-    if (ret) { printf("CERT: set subject name failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_issuer_name(&caCrt, CA_SUBJECT);
+    if (ret) { printf("CERT: CA issuer failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_subject_name(&caCrt, CA_SUBJECT);
+    if (ret) { printf("CERT: CA subject failed -0x%x\n", -ret); break; }
 
-    ret = mbedtls_x509write_crt_set_basic_constraints(&crt, 0, -1);
-    if (ret) { printf("CERT: set basic constraints failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_basic_constraints(&caCrt, 1, -1);
+    if (ret) { printf("CERT: CA basic constraints failed -0x%x\n", -ret); break; }
 
-    ret = mbedtls_x509write_crt_set_key_usage(&crt,
+    ret = mbedtls_x509write_crt_set_key_usage(&caCrt,
+      MBEDTLS_X509_KU_KEY_CERT_SIGN | MBEDTLS_X509_KU_CRL_SIGN);
+    if (ret) { printf("CERT: CA key usage failed -0x%x\n", -ret); break; }
+
+    // Skip SKI — Security.framework computes it differently than mbedtls
+    // Which causes AKI/SKI mismatch and blocks chain building
+
+    size_t caDerLen = 0;
+    ret = writeDer(&caCrt, &drbg, caDer, 2048, &caDerLen);
+    if (ret) { printf("CERT: CA write der failed %d\n", ret); break; }
+    *caLen = caDerLen;
+
+    // ── Build device certificate (signed by CA) ──
+    char subjStr[256];
+    snprintf(subjStr, sizeof(subjStr), "CN=%s,O=BBL Technologies Co. Ltd,C=CN", cn);
+
+    mbedtls_x509write_crt_set_subject_key(&devCrt, &devKey);
+    mbedtls_x509write_crt_set_issuer_key(&devCrt, &caKey);
+    mbedtls_x509write_crt_set_md_alg(&devCrt, MBEDTLS_MD_SHA256);
+    mbedtls_x509write_crt_set_version(&devCrt, MBEDTLS_X509_CRT_VERSION_3);
+
+    { mbedtls_mpi s; mbedtls_mpi_init(&s); mbedtls_mpi_lset(&s, 2); ret = mbedtls_x509write_crt_set_serial(&devCrt, &s); mbedtls_mpi_free(&s); if (ret) break; }
+
+    ret = mbedtls_x509write_crt_set_validity(&devCrt, "20200101000000", "20350101000000");
+    if (ret) { printf("CERT: dev validity failed -0x%x\n", -ret); break; }
+
+    ret = mbedtls_x509write_crt_set_issuer_name(&devCrt, CA_SUBJECT);
+    if (ret) { printf("CERT: dev issuer failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_subject_name(&devCrt, subjStr);
+    if (ret) { printf("CERT: dev subject failed -0x%x\n", -ret); break; }
+
+    // Device cert: NO basic constraints (CA:FALSE implicitly), standard TLS key usage
+    ret = mbedtls_x509write_crt_set_key_usage(&devCrt,
       MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_ENCIPHERMENT);
-    if (ret) { printf("CERT: set key usage failed -0x%x\n", -ret); break; }
+    if (ret) { printf("CERT: dev key usage failed -0x%x\n", -ret); break; }
 
-    ret = mbedtls_x509write_crt_set_subject_key_identifier(&crt);
-    if (ret) { printf("CERT: set SKI failed -0x%x\n", -ret); break; }
+    // Skip SKI/AKI — Security.framework computes key IDs differently than mbedtls
 
-    {
-      static const uint8_t v1_val[] = { 0x0C, 0x02, 0x76, 0x31 };
-      ret = mbedtls_x509write_crt_set_extension(&crt,
-        OID_BAMBU_1, sizeof(OID_BAMBU_1) - 1, 0, v1_val, sizeof(v1_val));
-      if (ret) { printf("CERT: set ext 39859.1 failed -0x%x\n", -ret); break; }
+    // Netscape certificate type for SSL server (Security.framework may require this)
+    ret = mbedtls_x509write_crt_set_ns_cert_type(&devCrt, MBEDTLS_X509_NS_CERT_TYPE_SSL_SERVER);
+    if (ret) { printf("CERT: dev ns cert type failed -0x%x\n", -ret); break; }
 
-      static const uint8_t false_val[] = { 0x0C, 0x05, 0x66, 0x61, 0x6C, 0x73, 0x65 };
-      ret = mbedtls_x509write_crt_set_extension(&crt,
-        OID_BAMBU_2, sizeof(OID_BAMBU_2) - 1, 0, false_val, sizeof(false_val));
-      if (ret) { printf("CERT: set ext 39859.2 failed -0x%x\n", -ret); break; }
+    // Extended Key Usage: TLS Web Server Authentication (required by macOS Security.framework)
+    static const char eku_oid[] = { 0x55, 0x1D, 0x25, 0x00 };
+    static const uint8_t serverAuth_val[] = {
+      0x30, 0x0A,           // SEQUENCE, length 10
+      0x06, 0x08,           // OID, length 8
+      0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01  // 1.3.6.1.5.5.7.3.1
+    };
+    ret = mbedtls_x509write_crt_set_extension(&devCrt, eku_oid, 3,
+                                              0, serverAuth_val, sizeof(serverAuth_val));
+    if (ret) { printf("CERT: dev EKU failed -0x%x\n", -ret); break; }
 
-      static const uint8_t printer_val[] = { 0x0C, 0x07, 0x50, 0x72, 0x69, 0x6E, 0x74, 0x65, 0x72 };
-      ret = mbedtls_x509write_crt_set_extension(&crt,
-        OID_BAMBU_1_3, sizeof(OID_BAMBU_1_3) - 1, 0, printer_val, sizeof(printer_val));
-      if (ret) { printf("CERT: set ext 39859.1.3 failed -0x%x\n", -ret); break; }
+    // Skip Bambu extensions — Security.framework may reject unknown OIDs
+    // ret = addBambuExtensions(&devCrt);
+    // if (ret) { printf("CERT: Bambu ext failed -0x%x\n", -ret); break; }
 
-      static const uint8_t n7v2_val[] = { 0x0C, 0x05, 0x4E, 0x37, 0x2D, 0x56, 0x32 };
-      ret = mbedtls_x509write_crt_set_extension(&crt,
-        OID_BAMBU_1_4, sizeof(OID_BAMBU_1_4) - 1, 0, n7v2_val, sizeof(n7v2_val));
-      if (ret) { printf("CERT: set ext 39859.1.4 failed -0x%x\n", -ret); break; }
+    // No SAN (matching real printer)
 
-      static const uint8_t int0_val[] = { 0x02, 0x01, 0x00 };
-      ret = mbedtls_x509write_crt_set_extension(&crt,
-        OID_BAMBU_1_999, sizeof(OID_BAMBU_1_999) - 1, 0, int0_val, sizeof(int0_val));
-      if (ret) { printf("CERT: set ext 39859.1.999 failed -0x%x\n", -ret); break; }
+    size_t devDerLen = 0;
+    ret = writeDer(&devCrt, &drbg, certDer, 2048, &devDerLen);
+    if (ret) { printf("CERT: dev write der failed %d\n", ret); break; }
+
+    // Send CA in chain — Security.framework needs to see the CA cert
+    // and match it byte-for-byte against the trust store anchor
+    if (devDerLen + caDerLen <= 3072) {
+      memcpy(certDer + devDerLen, caDer, caDerLen);
+      *certLen = devDerLen + caDerLen;
+    } else {
+      *certLen = devDerLen;
     }
 
+    printf("CERT: generated CA (%d bytes) + device cert (%d bytes) CN=%s\n",
+           (int)caDerLen, (int)devDerLen, cn);
+
+    // Self-test: parse the device cert
     {
-      uint8_t buf[2048];
-      int len = mbedtls_x509write_crt_der(&crt, buf, sizeof(buf),
-                                           mbedtls_ctr_drbg_random, &drbg);
-      if (len <= 0) { printf("CERT: write der failed %d\n", len); break; }
-      memcpy(certDer, buf + sizeof(buf) - len, len);
-      *certLen = len;
-      printf("CERT: generated OK (%d bytes)\n", len);
-      ok = true;
+      mbedtls_x509_crt testCrt;
+      mbedtls_x509_crt_init(&testCrt);
+      ret = mbedtls_x509_crt_parse(&testCrt, certDer, *certLen);
+      if (ret != 0) {
+        printf("CERT: SELF-TEST FAILED -0x%x\n", -ret);
+      } else {
+        printf("CERT: self-test OK\n");
+      }
+      mbedtls_x509_crt_free(&testCrt);
     }
+
+    // Print CA PEM for user
+    {
+      size_t pemLen = 0;
+      uint8_t *pemBuf = (uint8_t *)malloc(2048);
+      if (pemBuf) {
+        ret = mbedtls_pem_write_buffer("-----BEGIN CERTIFICATE-----\n", "-----END CERTIFICATE-----\n",
+                                       caDer, caDerLen, pemBuf, 2048, &pemLen);
+        if (ret == 0 && pemLen > 0) {
+          printf("\n=== Append this certificate to Bambu Studio's printer.cer ===\n");
+          printf("%s", (char *)pemBuf);
+          printf("=== (without ===== markers, just the base64 block) ===\n\n");
+        }
+        free(pemBuf);
+      }
+    }
+
+    ok = true;
   } while (0);
 
-  mbedtls_x509write_crt_free(&crt);
-  mbedtls_pk_free(&key);
+  mbedtls_x509write_crt_free(&devCrt);
+  mbedtls_x509write_crt_free(&caCrt);
+  mbedtls_pk_free(&devKey);
+  mbedtls_pk_free(&caKey);
   mbedtls_ctr_drbg_free(&drbg);
   mbedtls_entropy_free(&entropy);
 
-  if (!ok) { *certLen = 0; *keyLen = 0; }
+  if (!ok) { *certLen = 0; *keyLen = 0; *caLen = 0; }
   return ok;
 }
