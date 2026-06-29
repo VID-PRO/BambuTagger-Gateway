@@ -15,7 +15,7 @@
 #define OID_BAMBU_1_4   "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x04"
 #define OID_BAMBU_1_999 "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x87\x67"
 
-#define CA_SUBJECT "CN=BBL Device CA N7-V2"  // must match real Bambu root name
+#define CA_SUBJECT "CN=Virtual Printer CA"  // generic name (BBL-like name may be rejected)
 
 static int addBambuExtensions(mbedtls_x509write_cert *crt) {
   int ret;
@@ -43,6 +43,36 @@ static int addBambuExtensions(mbedtls_x509write_cert *crt) {
   ret = mbedtls_x509write_crt_set_extension(crt,
     OID_BAMBU_1_999, sizeof(OID_BAMBU_1_999) - 1, 0, int0_val, sizeof(int0_val));
   return ret;
+}
+
+static int addSanExtension(mbedtls_x509write_cert *crt, const char *cn, const uint8_t *ip) {
+  uint8_t buf[128];
+  uint8_t *p = buf;
+  *p++ = 0x30; // SEQUENCE
+  uint8_t *lenp = p++;
+
+  // DNS:localhost
+  *p++ = 0x82; *p++ = 9; memcpy(p, "localhost", 9); p += 9;
+
+  // DNS:{cn}
+  size_t cnl = strlen(cn);
+  *p++ = 0x82; *p++ = cnl; memcpy(p, cn, cnl); p += cnl;
+
+  // IP:{ip} — ip is binary bytes {a,b,c,d}, not a string
+  if (ip) {
+    *p++ = 0x87; *p++ = 4;
+    *p++ = ip[0]; *p++ = ip[1]; *p++ = ip[2]; *p++ = ip[3];
+  }
+
+  // IP:127.0.0.1
+  *p++ = 0x87; *p++ = 4; *p++ = 127; *p++ = 0; *p++ = 0; *p++ = 1;
+
+  *lenp = (uint8_t)(p - buf - 2);
+  size_t total = p - buf;
+
+  static const char sanOid[] = { 0x55, 0x1D, 0x19 }; // 2.5.29.17
+  return mbedtls_x509write_crt_set_extension(crt, sanOid, sizeof(sanOid),
+                                             0, buf, total);
 }
 
 static int writeDer(mbedtls_x509write_cert *crt, mbedtls_ctr_drbg_context *drbg,
@@ -137,7 +167,7 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
     if (ret) { printf("CERT: CA basic constraints failed -0x%x\n", -ret); break; }
 
     ret = mbedtls_x509write_crt_set_key_usage(&caCrt,
-      MBEDTLS_X509_KU_KEY_CERT_SIGN | MBEDTLS_X509_KU_CRL_SIGN);
+      MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_CERT_SIGN | MBEDTLS_X509_KU_CRL_SIGN);
     if (ret) { printf("CERT: CA key usage failed -0x%x\n", -ret); break; }
 
     // Skip SKI — Security.framework computes it differently than mbedtls
@@ -167,33 +197,35 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
     ret = mbedtls_x509write_crt_set_subject_name(&devCrt, subjStr);
     if (ret) { printf("CERT: dev subject failed -0x%x\n", -ret); break; }
 
-    // Device cert: NO basic constraints (CA:FALSE implicitly), standard TLS key usage
+    // Device cert: CA:FALSE is implicit (omitted to avoid mbedtls producing an invalid empty value)
     ret = mbedtls_x509write_crt_set_key_usage(&devCrt,
       MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_ENCIPHERMENT);
     if (ret) { printf("CERT: dev key usage failed -0x%x\n", -ret); break; }
 
     // Skip SKI/AKI — Security.framework computes key IDs differently than mbedtls
 
-    // Netscape certificate type for SSL server (Security.framework may require this)
+    // Netscape certificate type for SSL server
     ret = mbedtls_x509write_crt_set_ns_cert_type(&devCrt, MBEDTLS_X509_NS_CERT_TYPE_SSL_SERVER);
     if (ret) { printf("CERT: dev ns cert type failed -0x%x\n", -ret); break; }
 
-    // Extended Key Usage: TLS Web Server Authentication (required by macOS Security.framework)
+    // Extended Key Usage: TLS Web Server + Client Authentication
     static const char eku_oid[] = { 0x55, 0x1D, 0x25, 0x00 };
-    static const uint8_t serverAuth_val[] = {
-      0x30, 0x0A,           // SEQUENCE, length 10
-      0x06, 0x08,           // OID, length 8
-      0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01  // 1.3.6.1.5.5.7.3.1
+    static const uint8_t eku_val[] = {
+      0x30, 0x14,           // SEQUENCE, length 20
+      0x06, 0x08,           // OID serverAuth (1.3.6.1.5.5.7.3.1)
+      0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01,
+      0x06, 0x08,           // OID clientAuth (1.3.6.1.5.5.7.3.2)
+      0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02
     };
     ret = mbedtls_x509write_crt_set_extension(&devCrt, eku_oid, 3,
-                                              0, serverAuth_val, sizeof(serverAuth_val));
+                                               0, eku_val, sizeof(eku_val));
     if (ret) { printf("CERT: dev EKU failed -0x%x\n", -ret); break; }
 
     // Skip Bambu extensions — Security.framework may reject unknown OIDs
-    // ret = addBambuExtensions(&devCrt);
-    // if (ret) { printf("CERT: Bambu ext failed -0x%x\n", -ret); break; }
 
-    // No SAN (matching real printer)
+    // Subject Alternative Name: IP, localhost, serial (required by modern TLS)
+    ret = addSanExtension(&devCrt, cn, ip);
+    if (ret) { printf("CERT: dev SAN failed -0x%x\n", -ret); break; }
 
     size_t devDerLen = 0;
     ret = writeDer(&devCrt, &drbg, certDer, 2048, &devDerLen);
@@ -232,9 +264,9 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
         ret = mbedtls_pem_write_buffer("-----BEGIN CERTIFICATE-----\n", "-----END CERTIFICATE-----\n",
                                        caDer, caDerLen, pemBuf, 2048, &pemLen);
         if (ret == 0 && pemLen > 0) {
-          printf("\n=== Append this certificate to Bambu Studio's printer.cer ===\n");
+          printf("\n=== Append to Bambu Studio's printer.cer via: ./tools/trust-gateway.sh <gateway-ip> ===\n");
           printf("%s", (char *)pemBuf);
-          printf("=== (without ===== markers, just the base64 block) ===\n\n");
+          printf("=== Gateway CA cert (PEM) ===\n\n");
         }
         free(pemBuf);
       }
