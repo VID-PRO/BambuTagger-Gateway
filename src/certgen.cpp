@@ -9,13 +9,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define OID_BAMBU_1     "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01"
-#define OID_BAMBU_2     "\x2B\x06\x01\x04\x01\x82\xB7\x33\x02"
-#define OID_BAMBU_1_3   "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x03"
-#define OID_BAMBU_1_4   "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x04"
-#define OID_BAMBU_1_999 "\x2B\x06\x01\x04\x01\x82\xB7\x33\x01\x87\x67"
+#define OID_BAMBU_1     "\x2B\x06\x01\x04\x01\x86\x9A\xC3\xED\x49\x01"
+#define OID_BAMBU_2     "\x2B\x06\x01\x04\x01\x86\x9A\xC3\xED\x49\x02"
+#define OID_BAMBU_1_3   "\x2B\x06\x01\x04\x01\x86\x9A\xC3\xED\x49\x01\x03"
+#define OID_BAMBU_1_4   "\x2B\x06\x01\x04\x01\x86\x9A\xC3\xED\x49\x01\x04"
+#define OID_BAMBU_1_999 "\x2B\x06\x01\x04\x01\x86\x9A\xC3\xED\x49\x01\x87\x67"
 
-#define CA_SUBJECT "CN=Virtual Printer CA"  // generic name (BBL-like name may be rejected)
+#define CA_SUBJECT "C=CN, O=BBL Technologies Co. Ltd, CN=BBL Device CA N7-V2"  // original subject for testing
 
 static int addBambuExtensions(mbedtls_x509write_cert *crt) {
   int ret;
@@ -170,8 +170,11 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
       MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_CERT_SIGN | MBEDTLS_X509_KU_CRL_SIGN);
     if (ret) { printf("CERT: CA key usage failed -0x%x\n", -ret); break; }
 
-    // Skip SKI — Security.framework computes it differently than mbedtls
-    // Which causes AKI/SKI mismatch and blocks chain building
+    // SKI + AKI (self-signed: both use same key)
+    ret = mbedtls_x509write_crt_set_subject_key_identifier(&caCrt);
+    if (ret) { printf("CERT: CA SKI failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_authority_key_identifier(&caCrt);
+    if (ret) { printf("CERT: CA AKI failed -0x%x\n", -ret); break; }
 
     size_t caDerLen = 0;
     ret = writeDer(&caCrt, &drbg, caDer, 2048, &caDerLen);
@@ -197,12 +200,18 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
     ret = mbedtls_x509write_crt_set_subject_name(&devCrt, subjStr);
     if (ret) { printf("CERT: dev subject failed -0x%x\n", -ret); break; }
 
-    // Device cert: CA:FALSE is implicit (omitted to avoid mbedtls producing an invalid empty value)
+    // Device cert: explicit CA:FALSE (required by some TLS stacks)
+    ret = mbedtls_x509write_crt_set_basic_constraints(&devCrt, 0, -1);
+    if (ret) { printf("CERT: dev basic constraints failed -0x%x\n", -ret); break; }
     ret = mbedtls_x509write_crt_set_key_usage(&devCrt,
       MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_ENCIPHERMENT);
     if (ret) { printf("CERT: dev key usage failed -0x%x\n", -ret); break; }
 
-    // Skip SKI/AKI — Security.framework computes key IDs differently than mbedtls
+    // SKI + AKI (AKI references the CA key — required by Security.framework)
+    ret = mbedtls_x509write_crt_set_subject_key_identifier(&devCrt);
+    if (ret) { printf("CERT: dev SKI failed -0x%x\n", -ret); break; }
+    ret = mbedtls_x509write_crt_set_authority_key_identifier(&devCrt);
+    if (ret) { printf("CERT: dev AKI failed -0x%x\n", -ret); break; }
 
     // Netscape certificate type for SSL server
     ret = mbedtls_x509write_crt_set_ns_cert_type(&devCrt, MBEDTLS_X509_NS_CERT_TYPE_SSL_SERVER);
@@ -233,14 +242,10 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
     ret = writeDer(&devCrt, &drbg, certDer, 2048, &devDerLen);
     if (ret) { printf("CERT: dev write der failed %d\n", ret); break; }
 
-    // Send CA in chain — Security.framework needs to see the CA cert
-    // and match it byte-for-byte against the trust store anchor
-    if (devDerLen + caDerLen <= 3072) {
-      memcpy(certDer + devDerLen, caDer, caDerLen);
-      *certLen = devDerLen + caDerLen;
-    } else {
-      *certLen = devDerLen;
-    }
+    // Do NOT include CA in chain — OpenSSL 3.x rejects self-signed CAs
+    // in the chain as X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN (fatal).
+    // The CA is installed in printer.cer as a trust anchor instead.
+    *certLen = devDerLen;
 
     printf("CERT: generated CA (%d bytes) + device cert (%d bytes) CN=%s\n",
            (int)caDerLen, (int)devDerLen, cn);

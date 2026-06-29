@@ -88,8 +88,8 @@ void MqttBridge::begin(GatewayConfig *cfg) {
 #ifdef ESP32
   {
     // Free up old NVS namespaces
-    // Clear legacy NVS namespaces — intentionally excludes "mqttg31" (current)
-    for (const char *ns : {"mqttgate", "mqttg2", "mqttg3", "mqttg4", "mqttg5", "mqttg6", "mqttg7", "mqttg8", "mqttg9", "mqttg10", "mqttg11", "mqttg12", "mqttg13", "mqttg14", "mqttg15", "mqttg16", "mqttg17", "mqttg18", "mqttg19", "mqttg20", "mqttg21", "mqttg22", "mqttg23", "mqttg24", "mqttg25", "mqttg26", "mqttg27", "mqttg28", "mqttg29", "mqttg30"}) {
+    // Clear legacy NVS namespaces — intentionally excludes "mqttg40" (current)
+    for (const char *ns : {"mqttgate", "mqttg2", "mqttg3", "mqttg4", "mqttg5", "mqttg6", "mqttg7", "mqttg8", "mqttg9", "mqttg10", "mqttg11", "mqttg12", "mqttg13", "mqttg14", "mqttg15", "mqttg16", "mqttg17", "mqttg18", "mqttg19", "mqttg20", "mqttg21", "mqttg22", "mqttg23", "mqttg24", "mqttg25", "mqttg26", "mqttg27", "mqttg28", "mqttg29", "mqttg30", "mqttg31", "mqttg32", "mqttg33", "mqttg34", "mqttg35", "mqttg36", "mqttg37", "mqttg38", "mqttg39"}) {
       Preferences oldPrefs;
       oldPrefs.begin(ns, false);
       oldPrefs.clear();
@@ -97,7 +97,7 @@ void MqttBridge::begin(GatewayConfig *cfg) {
     }
 
     Preferences prefs;
-            prefs.begin("mqttg31", false);
+            prefs.begin("mqttg40", false);
     _certLen = prefs.getBytes("certDer", _certDer, sizeof(_certDer));
     _keyLen = prefs.getBytes("keyDer", _keyDer, sizeof(_keyDer));
     _caLen = prefs.getBytes("caDer", _caDer, sizeof(_caDer));
@@ -119,13 +119,13 @@ void MqttBridge::begin(GatewayConfig *cfg) {
                               ipBytes)) {
         Serial.println("MQTT: cert generation failed!");
       } else {
-        prefs.begin("mqttg31", false);
+        prefs.begin("mqttg40", false);
         prefs.putBytes("certDer", _certDer, _certLen);
         prefs.putBytes("keyDer", _keyDer, _keyLen);
         prefs.putBytes("caDer", _caDer, _caLen);
         prefs.end();
-        Serial.printf("MQTT: generated & saved cert chain (%d bytes) + CA (%d bytes) SN=%s\n",
-                      _certLen, _caLen, _cfg->gatewaySerial);
+    Serial.printf("MQTT: generated & saved cert chain (%d bytes) + CA (%d bytes) SN=%s\n",
+                  _certLen, _caLen, _cfg->gatewaySerial);
       }
     } else {
       Serial.printf("MQTT: loaded cert chain from flash (%d bytes) + CA (%d bytes) SN=%s\n",
@@ -133,6 +133,8 @@ void MqttBridge::begin(GatewayConfig *cfg) {
     }
     derToPem(_certDer, _certLen, _certPem, sizeof(_certPem));
     derToPem(_caDer, _caLen, _caPem, sizeof(_caPem));
+    Serial.printf("MQTT: CA PEM follows\n%s\nMQTT: CA PEM END\n", _caPem);
+    Serial.printf("MQTT: Server cert PEM follows\n%s\nMQTT: Server cert PEM END\n", _certPem);
   }
 #endif
 
@@ -328,20 +330,87 @@ void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int l
 // downstream client management
 // ------------------------------------------------------------------
 int MqttBridge::acceptClient() {
-  // Try TLS server (port 8883) first
+  // Try TLS server (port 8883)
   {
     WiFiClient raw = _tlsServer.accept();
     if (raw) {
       if (!raw.connected()) { raw.stop(); return -1; }
       raw.setNoDelay(true);
+      Serial.printf("MQTT: accept from %s:%d -> %s:%d\n",
+                    raw.remoteIP().toString().c_str(), raw.remotePort(),
+                    raw.localIP().toString().c_str(), raw.localPort());
 
+      // Wait briefly for client to send data. If nothing arrives within 50ms,
+      // close the connection — the client is probing and needs to retry with TLS.
+      int peeked = -1;
+      for (int w = 0; w < 5; w++) {
+        if (!raw.connected()) { raw.stop(); return -1; }
+        if (raw.available() > 0) {
+          peeked = raw.read();
+          break;
+        }
+        delay(10);
+      }
+
+      if (peeked < 0) {
+        // No data from client — TCP probe. Keep the connection open and
+        // periodically poll for data in case the client is waiting for the
+        // server to send something first.
+        Serial.printf("MQTT: probe from %s:%d (keeping open, polling)\n",
+                      raw.remoteIP().toString().c_str(), raw.remotePort());
+
+        // Poll for data for up to 3 seconds
+        unsigned long start = millis();
+        int polled = -1;
+        while (millis() - start < 3000) {
+          if (!raw.connected()) break;
+          if (raw.available() > 0) { polled = raw.read(); break; }
+          delay(25);
+        }
+
+        if (polled >= 0) {
+          Serial.printf("MQTT: probe got data after %lums, feeding to TLS\n",
+                        millis() - start);
+          WiFiClient *rawTcp = new WiFiClient(raw);
+          TlsWiFiClient *tls = new TlsWiFiClient();
+          if (!tls->beginDer(rawTcp, _certDer, _certLen, _keyDer, _keyLen)) {
+            Serial.println("MQTT: TLS beginDer failed");
+            delete tls;
+            return -1;
+          }
+          tls->feedData((uint8_t)polled);
+          for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
+            if (!_clients[i].active) {
+              _clients[i].client = tls;
+              _clients[i].active = true;
+              _clients[i].isTls = true;
+              _clients[i].subCount = 0;
+              _clients[i].lastPid = 0;
+              _clients[i].lastActivity = millis();
+              Serial.printf("MQTT: TLS client %d from %s\n", i, raw.remoteIP().toString().c_str());
+              return i;
+            }
+          }
+          delete tls;
+          return -2;
+        } else {
+          Serial.printf("MQTT: probe timed out after 3s, closing\n");
+          raw.stop();
+          return -1;
+        }
+      }
+
+      // Client sent data — restore the byte and do TLS
       WiFiClient *rawTcp = new WiFiClient(raw);
       TlsWiFiClient *tls = new TlsWiFiClient();
       if (!tls->beginDer(rawTcp, _certDer, _certLen, _keyDer, _keyLen)) {
         Serial.println("MQTT: TLS beginDer failed");
-        delete tls;  // ~TlsWiFiClient deletes rawTcp
+        delete tls;
         return -1;
       }
+
+      // Feed the peeked byte back through the TLS client
+      tls->feedData((uint8_t)peeked);
 
       for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
         if (!_clients[i].active) {
@@ -355,8 +424,7 @@ int MqttBridge::acceptClient() {
           return i;
         }
       }
-      // No slots — clean up
-      delete tls;  // ~TlsWiFiClient handles all cleanup
+      delete tls;
       return -2;
     }
   }
@@ -411,11 +479,21 @@ void MqttBridge::handleClient(int idx) {
   WiFiClient &c = *cl.client;
 
   uint8_t header;
-  if (!readByte(c, header)) {
-    Serial.printf("MQTT: client %d read failed, disconnecting\n", idx);
+  int headerRead = -1;
+  int waited = 0;
+  while (waited <= 10) {
+    if (!c.connected()) break;
+    headerRead = c.read();
+    if (headerRead >= 0) break;
+    if (waited > 0) delay(20);
+    waited++;
+  }
+  if (headerRead < 0) {
+    Serial.printf("MQTT: client %d read failed (waited %dms), disconnecting\n", idx, waited * 20);
     disconnectClient(idx);
     return;
   }
+  header = (uint8_t)headerRead;
   cl.lastActivity = millis();
 
   // Log first MQTT packet type from each client

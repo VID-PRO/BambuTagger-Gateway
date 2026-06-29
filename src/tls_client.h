@@ -20,6 +20,7 @@ public:
   bool isTls() { return _ok && _tcp; }
   bool handshakeDone() { return _hsDone; }
   void tcpSetNoDelay(bool nodelay) { if (_tcp) _tcp->setNoDelay(nodelay); }
+  void feedData(uint8_t b) { _feedBuf[_feedLen++] = b; }
 
   void stop() override;
   size_t write(uint8_t b) override;
@@ -42,6 +43,12 @@ private:
   int _hsRetries = 0;
   unsigned long _hsStart = 0;
   int _hsState = 0;
+  uint16_t _dumpLen = 0;
+  uint8_t _dumpBuf[128];
+  uint16_t _sndDumpLen = 0;
+  uint8_t _sndDumpBuf[512];
+  uint8_t _feedBuf[64];
+  uint8_t _feedLen = 0;
   mbedtls_ssl_context _ssl;
   mbedtls_ssl_config _conf;
   mbedtls_x509_crt _cert;

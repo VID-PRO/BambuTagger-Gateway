@@ -5,6 +5,7 @@
 #define TAG "TLS"
 
 TlsWiFiClient::TlsWiFiClient() {
+  _feedLen = 0;
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_conf);
   mbedtls_x509_crt_init(&_cert);
@@ -50,6 +51,8 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   mbedtls_ssl_set_bio(&_ssl, this, bio_send, bio_recv, NULL);
 
   _ok = true;
+  _dumpLen = 0;
+  _sndDumpLen = 0;
   return true;
 }
 
@@ -124,6 +127,8 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   mbedtls_ssl_set_bio(&_ssl, this, bio_send, bio_recv, NULL);
 
   _ok = true;
+  _dumpLen = 0;
+  _sndDumpLen = 0;
   return true;
 }
 
@@ -141,6 +146,14 @@ int TlsWiFiClient::continueHandshake() {
 
   _hsRetries++;
 
+  int c = (_tcp ? _tcp->connected() : 0);
+  int a = (_tcp ? _tcp->available() : 0);
+
+  if (_hsRetries <= 3 || a > 0) {
+    Serial.printf("TLS: handshake attempt %d, connected=%d available=%d dumpLen=%d\n",
+                  _hsRetries, c, a, _dumpLen);
+  }
+
   int r = mbedtls_ssl_handshake(&_ssl);
   if (r == 0) {
     _hsDone = true; _hsRetries = 0;
@@ -153,11 +166,24 @@ int TlsWiFiClient::continueHandshake() {
     return 0;
   }
   _hsState = _ssl.state;
+  int cs = _ssl.session_negotiate->ciphersuite;
   char errbuf[128];
   mbedtls_strerror(r, errbuf, sizeof(errbuf));
   int alertLvl = _ssl.in_msg[0], alertDesc = _ssl.in_msg[1];
-  Serial.printf("TLS: handshake error: -0x%x (%s) state=%d alert=%d/%d\n",
-                -r, errbuf, _hsState, alertLvl, alertDesc);
+  Serial.printf("TLS: handshake error: -0x%x (%s) state=%d alert=%d/%d cs=%04x\n",
+                -r, errbuf, _hsState, alertLvl, alertDesc, cs);
+  if (_dumpLen > 0) {
+    Serial.printf("TLS: recv hex (%d bytes): ", _dumpLen);
+    for (int i = 0; i < (int)_dumpLen && i < 100; i++)
+      Serial.printf("%02x", _dumpBuf[i]);
+    Serial.printf("\n");
+  }
+  if (_sndDumpLen > 0) {
+    Serial.printf("TLS: sent hex (%d bytes): ", _sndDumpLen);
+    for (int i = 0; i < (int)_sndDumpLen && i < 512; i++)
+      Serial.printf("%02x", _sndDumpBuf[i]);
+    Serial.printf("\n");
+  }
   _ok = false;
   return -1;
 }
@@ -234,9 +260,31 @@ TlsWiFiClient::operator bool() { return _ok && _tcp && (*_tcp); }
 
 int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
   TlsWiFiClient *c = (TlsWiFiClient *)ctx;
+
+  // Return pre-fed data first
+  if (c->_feedLen > 0) {
+    size_t cp = (len < c->_feedLen) ? len : c->_feedLen;
+    memcpy(buf, c->_feedBuf, cp);
+    c->_feedLen -= cp;
+    if (c->_feedLen > 0) memmove(c->_feedBuf, c->_feedBuf + cp, c->_feedLen);
+    if (c->_dumpLen < sizeof(c->_dumpBuf)) {
+      size_t dcp = (cp > sizeof(c->_dumpBuf) - c->_dumpLen) ? sizeof(c->_dumpBuf) - c->_dumpLen : cp;
+      memcpy(c->_dumpBuf + c->_dumpLen, buf, dcp);
+      c->_dumpLen += dcp;
+    }
+    return cp;
+  }
+
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
   int r = c->_tcp->read(buf, len);
-  if (r > 0) return r;
+  if (r > 0) {
+    if (c->_dumpLen < sizeof(c->_dumpBuf)) {
+      size_t cp = (size_t)r > sizeof(c->_dumpBuf) - c->_dumpLen ? sizeof(c->_dumpBuf) - c->_dumpLen : (size_t)r;
+      memcpy(c->_dumpBuf + c->_dumpLen, buf, cp);
+      c->_dumpLen += cp;
+    }
+    return r;
+  }
   // WiFiClient::read() returns -1 (or 0) when the buffer is empty — not an
   // error.  Only return CONN_EOF if the TCP connection has actually closed.
   if (!c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
@@ -246,6 +294,12 @@ int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
 int TlsWiFiClient::bio_send(void *ctx, const unsigned char *buf, size_t len) {
   TlsWiFiClient *c = (TlsWiFiClient *)ctx;
   if (!c->_tcp || !c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
+  // Accumulate sent data for debugging
+  if (c->_sndDumpLen < sizeof(c->_sndDumpBuf)) {
+    size_t cp = len > sizeof(c->_sndDumpBuf) - c->_sndDumpLen ? sizeof(c->_sndDumpBuf) - c->_sndDumpLen : len;
+    memcpy(c->_sndDumpBuf + c->_sndDumpLen, buf, cp);
+    c->_sndDumpLen += cp;
+  }
   int r = c->_tcp->write(buf, len);
   if (r > 0) return r;
   return MBEDTLS_ERR_SSL_WANT_WRITE;
