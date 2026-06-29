@@ -155,7 +155,9 @@ int TlsWiFiClient::continueHandshake() {
   _hsState = _ssl.state;
   char errbuf[128];
   mbedtls_strerror(r, errbuf, sizeof(errbuf));
-  Serial.printf("TLS: handshake error: -0x%x (%s) state=%d\n", -r, errbuf, _hsState);
+  int alertLvl = _ssl.in_msg[0], alertDesc = _ssl.in_msg[1];
+  Serial.printf("TLS: handshake error: -0x%x (%s) state=%d alert=%d/%d\n",
+                -r, errbuf, _hsState, alertLvl, alertDesc);
   _ok = false;
   return -1;
 }

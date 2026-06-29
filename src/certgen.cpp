@@ -70,7 +70,7 @@ static int addSanExtension(mbedtls_x509write_cert *crt, const char *cn, const ui
   *lenp = (uint8_t)(p - buf - 2);
   size_t total = p - buf;
 
-  static const char sanOid[] = { 0x55, 0x1D, 0x19 }; // 2.5.29.17
+  static const char sanOid[] = { 0x55, 0x1D, 0x11 }; // 2.5.29.17
   return mbedtls_x509write_crt_set_extension(crt, sanOid, sizeof(sanOid),
                                              0, buf, total);
 }
@@ -155,7 +155,7 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
 
     { mbedtls_mpi s; mbedtls_mpi_init(&s); mbedtls_mpi_lset(&s, 1); ret = mbedtls_x509write_crt_set_serial(&caCrt, &s); mbedtls_mpi_free(&s); if (ret) break; }
 
-    ret = mbedtls_x509write_crt_set_validity(&caCrt, "20200101000000", "20350101000000");
+    ret = mbedtls_x509write_crt_set_validity(&caCrt, "20260101000000", "20270101000000");
     if (ret) { printf("CERT: CA validity failed -0x%x\n", -ret); break; }
 
     ret = mbedtls_x509write_crt_set_issuer_name(&caCrt, CA_SUBJECT);
@@ -189,7 +189,7 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
 
     { mbedtls_mpi s; mbedtls_mpi_init(&s); mbedtls_mpi_lset(&s, 2); ret = mbedtls_x509write_crt_set_serial(&devCrt, &s); mbedtls_mpi_free(&s); if (ret) break; }
 
-    ret = mbedtls_x509write_crt_set_validity(&devCrt, "20200101000000", "20350101000000");
+    ret = mbedtls_x509write_crt_set_validity(&devCrt, "20260101000000", "20270101000000");
     if (ret) { printf("CERT: dev validity failed -0x%x\n", -ret); break; }
 
     ret = mbedtls_x509write_crt_set_issuer_name(&devCrt, CA_SUBJECT);
@@ -221,7 +221,9 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
                                                0, eku_val, sizeof(eku_val));
     if (ret) { printf("CERT: dev EKU failed -0x%x\n", -ret); break; }
 
-    // Skip Bambu extensions — Security.framework may reject unknown OIDs
+    // Bambu device-type extensions — Studio expects these
+    ret = addBambuExtensions(&devCrt);
+    if (ret) { printf("CERT: dev Bambu extensions failed -0x%x\n", -ret); break; }
 
     // Subject Alternative Name: IP, localhost, serial (required by modern TLS)
     ret = addSanExtension(&devCrt, cn, ip);
