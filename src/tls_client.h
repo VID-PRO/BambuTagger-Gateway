@@ -30,6 +30,7 @@ public:
   int read(uint8_t *buf, size_t size) override;
   int peek() override;
   void flush() override;
+  void flushWrites();
   uint8_t connected() override;
   operator bool() override;
 

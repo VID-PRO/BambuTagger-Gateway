@@ -480,6 +480,10 @@ void MqttBridge::handleClient(int idx) {
       }
       sendConnAck(c, false, 0);
       Serial.printf("MQTT: ConnAck sent to client %d\n", idx);
+      // Flush pending TLS writes so the client receives ConnAck promptly
+      if (cl.isTls) {
+        ((TlsWiFiClient *)&c)->flushWrites();
+      }
       break;
     }
 
@@ -713,10 +717,8 @@ void MqttBridge::handleClient(int idx) {
 // MQTT packet writers
 // ------------------------------------------------------------------
 void MqttBridge::sendConnAck(WiFiClient &c, bool sp, uint8_t rc) {
-  uint8_t vh[2] = {(uint8_t)(sp ? 1 : 0), rc};
-  c.write((uint8_t)0x20);
-  writeRemainingLength(c, 2);
-  c.write(vh, 2);
+  uint8_t pkt[4] = {0x20, 0x02, (uint8_t)(sp ? 1 : 0), rc};
+  c.write(pkt, 4);
 }
 
 void MqttBridge::sendSubAck(WiFiClient &c, uint16_t pid, uint8_t count) {

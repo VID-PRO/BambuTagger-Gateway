@@ -251,6 +251,13 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
 
 int TlsWiFiClient::peek() { return -1; }
 void TlsWiFiClient::flush() {}
+void TlsWiFiClient::flushWrites() {
+  if (!_ok || !_hsDone) return;
+  // Force pending TLS writes to be sent by doing a non-blocking read.
+  // mbedtls flushes its write buffer before reading the next record.
+  uint8_t tmp;
+  mbedtls_ssl_read(&_ssl, &tmp, 1);
+}
 uint8_t TlsWiFiClient::connected() {
   if (!_ok && _tcp) return _tcp->connected();
   return _ok && _tcp && _tcp->connected();
