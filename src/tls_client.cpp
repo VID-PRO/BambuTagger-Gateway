@@ -6,6 +6,8 @@
 
 TlsWiFiClient::TlsWiFiClient() {
   _feedLen = 0;
+  _rlen = 0;
+  _rpos = 0;
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_conf);
   mbedtls_x509_crt_init(&_cert);
@@ -41,9 +43,17 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_NONE);
+  mbedtls_ssl_conf_renegotiation(&_conf, MBEDTLS_SSL_RENEGOTIATION_DISABLED);
 
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
+
+  // Enable mbedtls debug logging
+  mbedtls_ssl_conf_dbg(&_conf, [](void *ctx, int level, const char *file, int line, const char *str) {
+    if (level <= 1) { // only most important messages
+      Serial.printf("MBEDTLS: %s:%d: %s", file, line, str);
+    }
+  }, NULL);
 
   r = mbedtls_ssl_setup(&_ssl, &_conf);
   if (r != 0) { Serial.printf("TLS: ssl setup failed: -0x%x\n", -r); return false; }
@@ -119,9 +129,17 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_NONE);
+  mbedtls_ssl_conf_renegotiation(&_conf, MBEDTLS_SSL_RENEGOTIATION_DISABLED);
 
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
+
+  // Enable mbedtls debug logging
+  mbedtls_ssl_conf_dbg(&_conf, [](void *ctx, int level, const char *file, int line, const char *str) {
+    if (level <= 1) {
+      Serial.printf("MBEDTLS: %s:%d: %s", file, line, str);
+    }
+  }, NULL);
 
   r = mbedtls_ssl_setup(&_ssl, &_conf);
   if (r != 0) { Serial.printf("TLS: ssl setup failed: -0x%x\n", -r); return false; }
@@ -216,6 +234,8 @@ void TlsWiFiClient::stop() {
   mbedtls_entropy_init(&_entropy);
   mbedtls_ctr_drbg_init(&_drbg);
   _hsDone = false;
+  _rlen = 0;
+  _rpos = 0;
 }
 
 size_t TlsWiFiClient::write(uint8_t b) { return write(&b, 1); }
@@ -245,21 +265,74 @@ int TlsWiFiClient::available() {
 }
 
 int TlsWiFiClient::read() {
-  uint8_t b;
-  if (read(&b, 1) == 1) return b;
-  return -1;
+  // Refill internal buffer if empty
+  if (_rlen == 0) {
+    int r = read(_rbuf, sizeof(_rbuf));
+    if (r <= 0) return -1;
+    _rlen = (size_t)r;
+    _rpos = 0;
+  }
+  uint8_t b = _rbuf[_rpos++];
+  _rlen--;
+  return b;
 }
 
 int TlsWiFiClient::read(uint8_t *buf, size_t size) {
   if (!_ok || !_hsDone) { return -1; }
-  int r = mbedtls_ssl_read(&_ssl, buf, size);
-  if (r < 0) {
-    if (r == MBEDTLS_ERR_SSL_WANT_READ) { _readWantCnt++; return -1; }
-    if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) { _readCloseNotify++; return -1; }
-    _ok = false;
-    return -1;
+  size_t total = 0;
+  // Serve from internal buffer first
+  if (_rlen > 0) {
+    size_t cp = (size < _rlen) ? size : _rlen;
+    memcpy(buf, _rbuf + _rpos, cp);
+    _rpos += cp;
+    _rlen -= cp;
+    buf += cp;
+    size -= cp;
+    total += cp;
   }
-  return r;
+  // Read remaining from mbedtls
+  if (size > 0) {
+    int r = mbedtls_ssl_read(&_ssl, buf, size);
+    if (r >= 0) {
+      total += r;
+    } else if (r == MBEDTLS_ERR_SSL_WANT_READ) {
+      // mbedtls_ssl_read may return WANT_READ because the TCP data hasn't
+      // arrived yet, or because mbedTLS needs a retry to complete processing
+      // of a partially-fetched TLS record. Retry with short delays.
+      bool gotData = false;
+      for (int retry = 0; retry < 25; retry++) {
+        // Only delay+retry if there's plausible data available
+        if ((_tcp && _tcp->available() > 0) || _feedLen > 0) {
+          delay(5);
+          r = mbedtls_ssl_read(&_ssl, buf, size);
+          if (r >= 0) { total += r; gotData = true; break; }
+          if (r != MBEDTLS_ERR_SSL_WANT_READ) break;
+        } else {
+          break; // no TCP data and no fed data, don't spin
+        }
+      }
+      if (!gotData) {
+        _readWantCnt++;
+        if (_readWantCnt <= 5 || _readWantCnt % 10 == 0) {
+          Serial.printf("TLS: read WANT_READ cnt=%d avail=%d tcpAvail=%d inBuf=%d feed=%d\n",
+                        _readWantCnt, mbedtls_ssl_get_bytes_avail(&_ssl),
+                        _tcp ? _tcp->available() : -1,
+                        _ssl.in_left, _feedLen);
+        }
+        return total > 0 ? (int)total : -1;
+      }
+    } else if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+      _readCloseNotify++;
+      return total > 0 ? (int)total : -1;
+    } else {
+      char errbuf[128];
+      mbedtls_strerror(r, errbuf, sizeof(errbuf));
+      Serial.printf("TLS: ssl_read error: -0x%x (%s)\n", -r, errbuf);
+      _ok = false;
+      return total > 0 ? (int)total : -1;
+    }
+  }
+  return total > 0 ? (int)total : -1;
 }
 
 int TlsWiFiClient::peek() { return -1; }
@@ -303,6 +376,13 @@ int TlsWiFiClient::bio_recv(void *ctx, unsigned char *buf, size_t len) {
       size_t cp = (size_t)r > sizeof(c->_dumpBuf) - c->_dumpLen ? sizeof(c->_dumpBuf) - c->_dumpLen : (size_t)r;
       memcpy(c->_dumpBuf + c->_dumpLen, buf, cp);
       c->_dumpLen += cp;
+    }
+    if (c->_bioLogCnt < 20) {
+      c->_bioLogCnt++;
+      int tcpA = c->_tcp ? c->_tcp->available() : -1;
+      int hd = (r >= 5) ? (buf[0] << 16 | buf[1] << 8 | buf[2]) : -1;
+      Serial.printf("TLS: bio_recv[%d] len=%d ret=%d tcpAvail=%d hd=%06x\n",
+                    c->_bioLogCnt, (int)len, r, tcpA, hd);
     }
     return r;
   }

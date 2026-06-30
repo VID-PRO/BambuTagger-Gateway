@@ -452,13 +452,22 @@ void MqttBridge::handleClient(int idx) {
     if (headerRead >= 0) break;
     if (waited > 0) delay(20);
     waited++;
+    // Log periodic diagnostics during wait
+    if (waited == 2) {
+      if (cl.isTls) {
+        TlsWiFiClient *tls = (TlsWiFiClient *)&c;
+        Serial.printf("MQTT: client %d first read fail, rawAvail=%d tcpAvail=%d\n",
+                      idx, tls->rawAvailable(), c.connected());
+      }
+    }
   }
   if (headerRead < 0) {
     if (cl.isTls) {
       TlsWiFiClient *tls = (TlsWiFiClient *)&c;
-      Serial.printf("MQTT: client %d read failed (waited %dms) ok=%d hs=%d tcpOK=%d wantCnt=%d closeNotify=%d\n",
+      int rawA = tls->rawAvailable();
+      Serial.printf("MQTT: client %d read failed (waited %dms) ok=%d hs=%d tcpOK=%d rawAvail=%d wantCnt=%d closeNotify=%d\n",
                     idx, waited * 20, tls->isOk(), tls->handshakeDone(), c.connected(),
-                    tls->readWantCnt(), tls->readCloseNotifyCnt());
+                    rawA, tls->readWantCnt(), tls->readCloseNotifyCnt());
     } else {
       Serial.printf("MQTT: client %d read failed (waited %dms)\n", idx, waited * 20);
     }
@@ -516,10 +525,22 @@ void MqttBridge::handleClient(int idx) {
       Serial.printf("MQTT: ConnAck write returned %u bytes\n", (unsigned)wret);
       // Flush pending TLS writes so the client receives ConnAck promptly
       if (cl.isTls) {
-        ((TlsWiFiClient *)&c)->flushWrites();
-        delay(50); // give lwIP time to push data to the wire
-        Serial.printf("MQTT: ConnAck flush done, avail=%d connected=%d\n",
-                      c.available(), c.connected());
+        TlsWiFiClient *tls = (TlsWiFiClient *)&c;
+        tls->flushWrites();
+        delay(100);
+        // Pre-read: try to fetch any data the client sent after ConnAck.
+        // This MUST happen before handleClient returns because
+        // mbedtls_ssl_read() works here but can fail with WANT_READ
+        // on subsequent calls (after mbedtls_ssl_write() was used).
+        uint8_t preBuf[512];
+        int preR = c.read(preBuf, sizeof(preBuf));
+        if (preR > 0) {
+          tls->bufferReadData(preBuf, preR);
+        }
+        int rawA = tls->rawAvailable();
+        int decA = c.available();
+        Serial.printf("MQTT: ConnAck flush done, preRead=%d avail=%d rawAvail=%d connected=%d\n",
+                      preR, decA, rawA, c.connected());
       }
       break;
     }
@@ -800,9 +821,15 @@ void MqttBridge::sendPublish(WiFiClient &c, const String &topic,
 // ------------------------------------------------------------------
 bool MqttBridge::readByte(WiFiClient &c, uint8_t &b) {
   int v = c.read();
-  if (v < 0) return false;
-  b = (uint8_t)v;
-  return true;
+  if (v >= 0) { b = (uint8_t)v; return true; }
+  // Retry with short delays — gives TLS data time to arrive and decrypt
+  for (int i = 0; i < 100; i++) {
+    delay(5);
+    v = c.read();
+    if (v >= 0) { b = (uint8_t)v; return true; }
+    if (!c.connected()) break;
+  }
+  return false;
 }
 
 bool MqttBridge::readRemainingLength(WiFiClient &c, uint32_t &len) {

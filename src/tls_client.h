@@ -20,10 +20,22 @@ public:
   bool isTls() { return _ok && _tcp; }
   bool isOk() { return _ok; }
   bool handshakeDone() { return _hsDone; }
+  int rawAvailable() { return _tcp ? _tcp->available() : 0; }
+  int rawRead(uint8_t *buf, size_t size) { return _tcp ? _tcp->read(buf, size) : 0; }
   int readWantCnt() { return _readWantCnt; }
   int readCloseNotifyCnt() { return _readCloseNotify; }
   void tcpSetNoDelay(bool nodelay) { if (_tcp) _tcp->setNoDelay(nodelay); }
   void feedData(uint8_t b) { _feedBuf[_feedLen++] = b; }
+  void bufferReadData(const uint8_t *data, size_t len) {
+    // Only store if buffer is empty — otherwise data from read() takes priority
+    if (_rlen == 0 && len > 0) {
+      if (len > sizeof(_rbuf)) len = sizeof(_rbuf);
+      memcpy(_rbuf, data, len);
+      _rlen = len;
+      _rpos = 0;
+    }
+  }
+  size_t internalBufAvail() { return _rlen; }
 
   void stop() override;
   size_t write(uint8_t b) override;
@@ -49,12 +61,18 @@ private:
   int _hsState = 0;
   int _readWantCnt = 0;
   int _readCloseNotify = 0;
+  int _bioLogCnt = 0;
   uint16_t _dumpLen = 0;
   uint8_t _dumpBuf[128];
   uint16_t _sndDumpLen = 0;
   uint8_t _sndDumpBuf[512];
   uint8_t _feedBuf[64];
   uint8_t _feedLen = 0;
+  // Internal read buffer — always fetches full TLS record (up to 512 bytes)
+  // to work around mbedtls_ssl_read() returning WANT_READ with 1-byte buffers
+  uint8_t _rbuf[512];
+  size_t _rlen = 0;
+  size_t _rpos = 0;
   mbedtls_ssl_context _ssl;
   mbedtls_ssl_config _conf;
   mbedtls_x509_crt _cert;
