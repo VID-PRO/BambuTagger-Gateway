@@ -225,6 +225,17 @@ static const char _PAGE_OTA[] PROGMEM = R"html(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BambuTagger-Gateway — Update</title>
 <style>
+h1{color:#3fb950;font-size:1.4em;margin-bottom:4px}
+.sub{color:#8b949e;font-size:.85em;margin-bottom:22px}
+.ver{color:#8b949e;font-size:.95em;margin:9px 0 4px}
+.ver span{color:#f0f6fc;font-weight:bold}
+.ver .new{color:#3fb950}
+.ver .old{color:#8b949e}
+button:disabled{background:#484f58;cursor:not-allowed;color:#8b949e}
+#status{display:none;margin-top:14px;padding:12px;border-radius:6px;font-size:.9em;text-align:center}
+#status.info{display:block;background:rgba(88,166,255,0.1);color:#58a6ff}
+#status.ok{display:block;background:rgba(63,185,80,0.1);color:#3fb950}
+#status.err{display:block;background:rgba(218,54,51,0.1);color:#da3633}
 )html";
 
 static const char _PAGE_OTA2[] PROGMEM = R"html(
@@ -240,13 +251,62 @@ static const char _PAGE_OTA2[] PROGMEM = R"html(
 </nav>
 <div class="wrapper">
 <div class="card">
-  <h2>Firmware Update</h2>
-  <p style="color:#8b949e;font-size:13px;margin-bottom:16px">Download and install the latest firmware from GitHub.</p>
-  <button onclick="location='/update/github'">Update from GitHub</button>
-  <p style="color:#484f58;font-size:12px;margin-top:12px">Current version: %%VERSION%%</p>
+  <h1>Firmware Update</h1>
+  <p class="sub">Install the latest release from GitHub</p>
+  <div class="ver">Current: <span class="old" id="cur-ver">%%VERSION%%</span></div>
+  <div class="ver">Latest:  <span class="new" id="lat-ver">&mdash;</span></div>
+  <div id="status"></div>
+  <button id="up-btn">Check&hellip;</button>
 </div>
 </div>
-<footer><a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway v%%VERSION%%</a> &mdash; MIT License</footer>
+<footer>&copy; 2026 — <a href="https://github.com/VID-PRO/BambuTagger-Gateway" target="_blank">BambuTagger-Gateway</a></footer>
+<script>
+(function(){
+  var btn=document.getElementById('up-btn'),
+      st=document.getElementById('status'),
+      lv=document.getElementById('lat-ver');
+  btn.textContent='Checking\u2026'; btn.disabled=true;
+  st.className='info'; st.textContent='Checking for latest release\u2026';
+  st.style.display='block';
+  var x=new XMLHttpRequest();
+  x.open('GET','/api/release',true);
+  x.onload=function(){
+    if(x.status==200){
+      try {
+        var r=JSON.parse(x.responseText);
+        lv.textContent=r.tag;
+        if(r.update){
+          st.className='info'; st.textContent='Version '+r.tag+' is available!';
+          btn.textContent='Install Version '+r.tag;
+          btn.disabled=false;
+        }else{
+          st.className='ok'; st.textContent='Already up to date.';
+          btn.textContent='Re-install '+r.tag;
+          btn.disabled=false;
+        }
+      } catch(e) {
+        st.className='err'; st.textContent='Failed to parse response.';
+        btn.textContent='Update from GitHub';
+        btn.disabled=false;
+      }
+    }else{
+      st.className='err'; st.textContent='Failed to check for updates.';
+      btn.textContent='Update from GitHub';
+      btn.disabled=false;
+    }
+  };
+  x.onerror=function(){
+    st.className='err'; st.textContent='Network error checking for updates.';
+    btn.textContent='Update from GitHub';
+    btn.disabled=false;
+  };
+  x.send();
+  btn.onclick=function(){
+    if(btn.disabled)return;
+    location.href='/update/github';
+  };
+})();
+</script>
 </body>
 </html>
 )html";
@@ -321,6 +381,50 @@ static void configSave() {
   EEPROM.put(0, _cfg);
   EEPROM.commit();
   EEPROM.end();
+}
+
+// ── version helpers ────────────────────────────────────────────────────
+
+static int compareVersions(const String &a, const String &b) {
+  int ma = 0, mi = 0, pa = 0;
+  int mb = 0, ni = 0, pb = 0;
+  String va = a, vb = b;
+  if (va.length() > 0 && va[0] == 'v') va = va.substring(1);
+  if (vb.length() > 0 && vb[0] == 'v') vb = vb.substring(1);
+  sscanf(va.c_str(), "%d.%d.%d", &ma, &mi, &pa);
+  sscanf(vb.c_str(), "%d.%d.%d", &mb, &ni, &pb);
+  if (ma != mb) return ma < mb ? -1 : 1;
+  if (mi != ni) return mi < ni ? -1 : 1;
+  if (pa != pb) return pa < pb ? -1 : 1;
+  return 0;
+}
+
+static String fetchLatestVersion() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(5000);
+
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setTimeout(10000);
+  http.setUserAgent(F("BambuTagger-Gateway"));
+
+  http.begin(client, F("https://api.github.com/repos/VID-PRO/BambuTagger-Gateway/releases/latest"));
+  int code = http.GET();
+
+  String version;
+  if (code == 200) {
+    String body = http.getString();
+    const char *key = "\"tag_name\":\"";
+    int start = body.indexOf(key);
+    if (start >= 0) {
+      start += strlen(key);
+      int end = body.indexOf('"', start);
+      if (end > start) version = body.substring(start, end);
+    }
+  }
+  http.end();
+  return version;
 }
 
 // ── page builders ──────────────────────────────────────────────────────
@@ -424,7 +528,52 @@ static void handleOta() {
   _server.send(200, "text/html; charset=utf-8", buildOta());
 }
 
+static void handleApiRelease() {
+  String tag, json;
+  bool canCheck = (strlen(_cfg.stationSsid) > 0) && WiFi.isConnected();
+  if (canCheck) tag = fetchLatestVersion();
+  if (tag.length() == 0) {
+    json = F("{\"tag\":\"?\",\"update\":false}");
+  } else {
+    bool update = compareVersions(tag, VERSION) > 0;
+    String safeTag = tag;
+    safeTag.replace("\"", "\\\"");
+    json = "{\"tag\":\"" + safeTag + "\",\"update\":" + (update ? "true" : "false") + "}";
+  }
+  _server.send(200, "application/json", json);
+}
+
 static void handleUpdateFromGithub() {
+  // Prevent downgrade
+  bool canCheck = (strlen(_cfg.stationSsid) > 0) && WiFi.isConnected();
+  if (canCheck) {
+    String latestVer = fetchLatestVersion();
+    if (latestVer.length() > 0 && compareVersions(latestVer, VERSION) <= 0) {
+      String html = F("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>No Update Available</title><style>");
+      html += FPSTR(_SITE_STYLE);
+      html += F("</style></head><body>");
+      html += F("<header><div class=\"logo\"><img src=\"/Logo/bambutagger.png\" alt=\"B\">"
+        "<h1>BambuTagger-Gateway</h1></div></header>");
+      html += F("<div class=\"wrapper\"><div class=\"card\" style=\"text-align:center\">");
+      html += F("<h1 style=\"color:#3fb950\">Already Up to Date</h1>");
+      html += F("<p style=\"color:#8b949e;margin-top:8px\">Current: <strong>v");
+      html += VERSION;
+      html += F("</strong> &mdash; Latest: <strong>");
+      html += latestVer;
+      html += F("</strong></p>");
+      html += F("<p style=\"color:#484f58;font-size:12px;margin-top:12px\">"
+        "Downgrade is not allowed.</p>");
+      html += F("<a href=\"/config/ota\" style=\"display:inline-block;margin-top:16px;"
+        "padding:10px 20px;background:#21262d;color:#c9d1d9;border-radius:6px;"
+        "text-decoration:none\">&larr; Back</a>");
+      html += F("</div></div></body></html>");
+      _server.send(200, "text/html; charset=utf-8", html);
+      return;
+    }
+  }
+
   String html = F("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<title>Updating&hellip;</title><style>");
@@ -652,6 +801,7 @@ inline void webconfigBegin() {
   _server.on("/config/settings", handleSettings);
   _server.on("/config/wifi", handleWifi);
   _server.on("/config/ota", handleOta);
+  _server.on("/api/release", handleApiRelease);
   _server.on("/update/github", handleUpdateFromGithub);
   _server.on("/save", HTTP_POST, handleSave);
   _server.onNotFound(handleNotFound);
