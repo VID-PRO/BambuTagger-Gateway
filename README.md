@@ -6,6 +6,44 @@ Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by 
 
 ---
 
+## Quick Start
+
+### 1. Flash the Gateway
+
+```bash
+# Install PlatformIO
+pip install platformio
+
+# Build and flash
+pio run -e esp32-s3 -t upload --upload-port /dev/ttyACM0
+```
+
+### 2. Connect to the Gateway
+
+After boot, the gateway creates a WiFi network named **`BambuTagger-Gateway`** (open). Connect your computer or phone to it, then open **http://192.168.4.1** in a browser.
+
+### 3. Configure Printer Settings
+
+From the web UI, go to the **Printer** page and enter:
+- **Hostname / IP** — your printer's LAN IP address
+- **Access Code** — 8-digit code from your printer's Settings → Network page
+- **Serial Number** — found in Settings → General → Machine Info
+- **Printer Model** — your printer model (P1S, X1C, A1, etc.)
+
+Click **Save & Reboot**. After reboot, check the Dashboard — **Printer Link** should show "connected" and the gateway's LED should turn off.
+
+### 4. Set Up Bambu Studio
+
+Open Bambu Studio → **Prepare** tab → click the printer icon → **Add Printer**. Select your model, choose **LAN** mode, and enter:
+- **IP Address**: the gateway's IP (shown on the Dashboard)
+- **Access Code**: your printer's access code
+
+The gateway will relay all traffic (MQTT, camera, file transfer) to the real printer transparently. No certificate import is needed — TLS is end-to-end encrypted with the printer's own certificate.
+
+> For detailed steps, open the **Guide** page in the web UI.
+
+---
+
 ## Features
 
 | Category | Details |
