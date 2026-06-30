@@ -160,7 +160,13 @@ void MqttBridge::loop() {
           for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
             if (_clients[i].active) {
               for (uint8_t s = 0; s < _clients[i].subCount; s++) {
-                _pubsub.subscribe(_clients[i].subs[s].topic.c_str(),
+                String upTopic = _clients[i].subs[s].topic;
+                if (strcmp(_cfg->gatewaySerial, _cfg->printerSerial) != 0) {
+                  String pfx = String("device/") + _cfg->gatewaySerial;
+                  if (upTopic.startsWith(pfx))
+                    upTopic = String("device/") + _cfg->printerSerial + upTopic.substring(pfx.length());
+                }
+                _pubsub.subscribe(upTopic.c_str(),
                                   _clients[i].subs[s].qos);
               }
             }
@@ -340,22 +346,19 @@ int MqttBridge::acceptClient() {
                     raw.remoteIP().toString().c_str(), raw.remotePort(),
                     raw.localIP().toString().c_str(), raw.localPort());
 
-      // Wait briefly for client to send data. If nothing arrives within 50ms,
-      // close the connection — the client is probing and needs to retry with TLS.
+      // Wait for first byte — need to delay slightly to let Bambu Studio
+      // send the TLS ClientHello before we try to do TLS handshake.
       int peeked = -1;
-      for (int w = 0; w < 5; w++) {
+      for (int w = 0; w < 20; w++) {
         if (!raw.connected()) { raw.stop(); return -1; }
         if (raw.available() > 0) {
           peeked = raw.read();
           break;
         }
-        delay(10);
+        delay(5);
       }
 
       if (peeked < 0) {
-        // Probe from client — close immediately. The plugin's
-        // _bambu_network_bind_detect is a pure TCP connectivity check;
-        // no data exchange is needed for it to succeed.
         Serial.printf("MQTT: probe from %s:%d (closing)\n",
                       raw.remoteIP().toString().c_str(), raw.remotePort());
         raw.stop();
@@ -441,39 +444,8 @@ void MqttBridge::handleClient(int idx) {
   WiFiClient &c = *cl.client;
 
   uint8_t header;
-  int headerRead = -1;
-  int waited = 0;
-  while (waited <= 50) {
-    if (!c.connected()) {
-      Serial.printf("MQTT: client %d disconnected (waited %dms)\n", idx, waited * 20);
-      break;
-    }
-    headerRead = c.read();
-    if (headerRead >= 0) break;
-    if (waited > 0) delay(20);
-    waited++;
-    // Log periodic diagnostics during wait
-    if (waited == 2) {
-      if (cl.isTls) {
-        TlsWiFiClient *tls = (TlsWiFiClient *)&c;
-        Serial.printf("MQTT: client %d first read fail, rawAvail=%d tcpAvail=%d\n",
-                      idx, tls->rawAvailable(), c.connected());
-      }
-    }
-  }
-  if (headerRead < 0) {
-    if (cl.isTls) {
-      TlsWiFiClient *tls = (TlsWiFiClient *)&c;
-      int rawA = tls->rawAvailable();
-      Serial.printf("MQTT: client %d read failed (waited %dms) ok=%d hs=%d tcpOK=%d rawAvail=%d wantCnt=%d closeNotify=%d\n",
-                    idx, waited * 20, tls->isOk(), tls->handshakeDone(), c.connected(),
-                    rawA, tls->readWantCnt(), tls->readCloseNotifyCnt());
-    } else {
-      Serial.printf("MQTT: client %d read failed (waited %dms)\n", idx, waited * 20);
-    }
-    disconnectClient(idx);
-    return;
-  }
+  int headerRead = c.read();
+  if (headerRead < 0) { return; }
   header = (uint8_t)headerRead;
   cl.lastActivity = millis();
 
@@ -673,7 +645,14 @@ void MqttBridge::handleClient(int idx) {
           cl.subs[cl.subCount].qos = subOpts & 0x03;
           cl.subCount++;
         }
-        _pubsub.subscribe(subTopic.c_str(), subOpts & 0x03);
+        // Translate gateway serial to printer serial in the subscription topic
+        String upTopic = subTopic;
+        if (_cfg && strcmp(_cfg->gatewaySerial, _cfg->printerSerial) != 0) {
+          String pfx = String("device/") + _cfg->gatewaySerial;
+          if (upTopic.startsWith(pfx))
+            upTopic = String("device/") + _cfg->printerSerial + upTopic.substring(pfx.length());
+        }
+        _pubsub.subscribe(upTopic.c_str(), subOpts & 0x03);
       }
 
       sendSubAck(c, pid, topicCount);
@@ -744,7 +723,13 @@ void MqttBridge::handleClient(int idx) {
           }
         }
         if (!stillWanted) {
-          _pubsub.unsubscribe(unsubTopic.c_str());
+          String upTopic = unsubTopic;
+          if (_cfg && strcmp(_cfg->gatewaySerial, _cfg->printerSerial) != 0) {
+            String pfx = String("device/") + _cfg->gatewaySerial;
+            if (upTopic.startsWith(pfx))
+              upTopic = String("device/") + _cfg->printerSerial + upTopic.substring(pfx.length());
+          }
+          _pubsub.unsubscribe(upTopic.c_str());
         }
       }
 

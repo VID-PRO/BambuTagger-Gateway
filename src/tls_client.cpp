@@ -1,6 +1,8 @@
 #include "tls_client.h"
 #include <string.h>
 #include <mbedtls/error.h>
+#include <mbedtls/cipher.h>
+#include <mbedtls/ssl_internal.h>
 
 #define TAG "TLS"
 
@@ -43,7 +45,7 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_NONE);
-  mbedtls_ssl_conf_renegotiation(&_conf, MBEDTLS_SSL_RENEGOTIATION_DISABLED);
+  mbedtls_ssl_conf_renegotiation(&_conf, MBEDTLS_SSL_RENEGOTIATION_ENABLED);
 
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
@@ -129,7 +131,7 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   mbedtls_ssl_conf_max_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_min_version(&_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
   mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_NONE);
-  mbedtls_ssl_conf_renegotiation(&_conf, MBEDTLS_SSL_RENEGOTIATION_DISABLED);
+  mbedtls_ssl_conf_renegotiation(&_conf, MBEDTLS_SSL_RENEGOTIATION_ENABLED);
 
   mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_drbg);
   mbedtls_ssl_conf_own_cert(&_conf, &_cert, &_pkey);
@@ -239,22 +241,109 @@ void TlsWiFiClient::stop() {
 }
 
 size_t TlsWiFiClient::write(uint8_t b) { return write(&b, 1); }
+
+// Manually encrypt and send a TLS Application Data record, bypassing
+// mbedtls_ssl_write().  The ESP32 mbedTLS port's ssl_decrypt_buf()
+// breaks after a write (returns WANT_READ despite valid records), so
+// we keep the read context pristine by never calling mbedtls_ssl_write().
 size_t TlsWiFiClient::write(const uint8_t *buf, size_t size) {
   if (!_ok || !_hsDone) return 0;
-  int r = mbedtls_ssl_write(&_ssl, buf, size);
-  if (r < 0) {
-    if (r != MBEDTLS_ERR_SSL_WANT_WRITE) {
-      Serial.printf("TLS: ssl_write error: -0x%x\n", -r);
-      _ok = false;
-    }
+  if (size == 0) return 0;
+
+  mbedtls_ssl_transform *t = _ssl.transform_out;
+  if (!t) { _ok = false; return 0; }
+
+  // Log transform details and both sequence number fields
+  Serial.printf("TLS: manw write size=%d ivlen=%d fixiv=%d taglen=%d expl=%d "
+                "out_ctr=%02x%02x%02x%02x%02x%02x%02x%02x "
+                "cur_out=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                (int)size, (int)t->ivlen, (int)t->fixed_ivlen, (int)t->taglen,
+                (int)(t->ivlen - t->fixed_ivlen),
+                _ssl.out_ctr[0], _ssl.out_ctr[1], _ssl.out_ctr[2], _ssl.out_ctr[3],
+                _ssl.out_ctr[4], _ssl.out_ctr[5], _ssl.out_ctr[6], _ssl.out_ctr[7],
+                _ssl.cur_out_ctr[0], _ssl.cur_out_ctr[1], _ssl.cur_out_ctr[2], _ssl.cur_out_ctr[3],
+                _ssl.cur_out_ctr[4], _ssl.cur_out_ctr[5], _ssl.cur_out_ctr[6], _ssl.cur_out_ctr[7]);
+
+  // Build nonce = fixed_iv || explicit_nonce
+  size_t expl = t->ivlen - t->fixed_ivlen;
+  // Use cur_out_ctr (the authoritative outbound record sequence number)
+  uint8_t nonce[16];
+  memcpy(nonce, t->iv_enc, t->fixed_ivlen);
+  memcpy(nonce + t->fixed_ivlen, _ssl.cur_out_ctr, expl);
+
+  // TLS record header
+  uint8_t hdr[5];
+  hdr[0] = MBEDTLS_SSL_MSG_APPLICATION_DATA;
+  hdr[1] = (uint8_t)_ssl.major_ver;
+  hdr[2] = (uint8_t)_ssl.minor_ver;
+  uint16_t rec_len = (uint16_t)(expl + size + t->taglen);
+  hdr[3] = (uint8_t)(rec_len >> 8);
+  hdr[4] = (uint8_t)(rec_len & 0xFF);
+
+  // AAD = outbound seq_num (8) || type (1) || version (2) || TLSCompressed.length (2)
+  // TLSCompressed.length is the PLAINTEXT length, NOT the total TLS record length
+  uint8_t aad[13];
+  memcpy(aad, _ssl.cur_out_ctr, 8);
+  aad[8] = hdr[0]; aad[9] = hdr[1]; aad[10] = hdr[2];
+  aad[11] = (uint8_t)(size >> 8);
+  aad[12] = (uint8_t)(size & 0xFF);
+
+  // Encrypt — output gets ciphertext || tag (olen = size + taglen)
+  uint8_t ct_buf[size + t->taglen];
+  size_t ctlen = 0;
+  int ret = mbedtls_cipher_auth_encrypt_ext(&t->cipher_ctx_enc,
+                                            nonce, t->ivlen,
+                                            aad, sizeof(aad),
+                                            buf, size,
+                                            ct_buf, sizeof(ct_buf), &ctlen,
+                                            t->taglen);
+  if (ret != 0) {
+    Serial.printf("TLS: encrypt error: -0x%x\n", -ret);
     return 0;
   }
-  if (r != (int)size) {
-    Serial.printf("TLS: ssl_write partial: %d of %u\n", r, (unsigned)size);
+
+  // Write header + explicit_nonce + (ciphertext || tag)
+  _tcp->write(hdr, 5);
+  _tcp->write(nonce + t->fixed_ivlen, expl);
+  _tcp->write(ct_buf, ctlen);
+  _tcp->flush();
+
+  // Invalidate both contexts' key_in_hardware flag. The ESP32 has one AES
+  // hardware unit shared between encrypt and decrypt contexts; the driver's
+  // key_in_hardware flag is per-context but the hardware key register is
+  // shared, so after an encryption the decryption key in hardware is evicted
+  // (and vice versa).  By clearing both flags we force the driver to reload
+  // the key before the next AES operation, regardless of direction.
+  // esp_gcm_context layout (32-bit Xtensa, offsets may vary by toolchain):
+  //   H[16] ghash[16] J0[16]  0-47
+  //   HL[16] HH[16]           48-303
+  //   ori_j0[16] iv* iv_len   304-327
+  //   aad_len data_len mode   328-343
+  //   aad*                    344-347
+  //   aes_ctx:                348+
+  //     key_bytes [1]         348
+  //     key_in_hardware [1]   349
+  //     key[32]               350-381
+  //   gcm_state               382-385
+  for (auto *t : { _ssl.transform_in, _ssl.transform_out }) {
+    if (t && t->cipher_ctx_dec.cipher_ctx) {
+      volatile uint8_t *p = (volatile uint8_t *)t->cipher_ctx_dec.cipher_ctx;
+      p[349] = 0;
+    }
+    if (t && t->cipher_ctx_enc.cipher_ctx) {
+      volatile uint8_t *p = (volatile uint8_t *)t->cipher_ctx_enc.cipher_ctx;
+      p[349] = 0;
+    }
   }
-  // Force state back to HANDSHAKE_OVER (mbedTLS server may regress).
-  _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
-  return r;
+
+  // Increment outbound sequence number (both copies)
+  for (int i = 7; i >= 0; i--)
+    if (++_ssl.cur_out_ctr[i] != 0) break;
+  for (int i = 7; i >= 0; i--)
+    if (++_ssl.out_ctr[i] != 0) break;
+
+  Serial.printf("TLS: manw wrote %d bytes (enc %d)\n", (int)(5 + expl + ctlen), (int)size);
+  return size;
 }
 
 int TlsWiFiClient::available() {
@@ -292,26 +381,26 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
     size -= cp;
     total += cp;
   }
-  // Read remaining from mbedtls
-  if (size > 0) {
-    // Defensive: ensure state hasn't regressed (mbedTLS port may revert
-    // to SERVER_CHANGE_CIPHER_SPEC after a prior write).
-    if (_ssl.state != MBEDTLS_SSL_HANDSHAKE_OVER) {
-      Serial.printf("TLS: forcing state from %d to HANDSHAKE_OVER\n", _ssl.state);
-      _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
-    }
-    // No pending output fix needed — bio_send now retries until all bytes
-    // are written, so out_left is always 0 after mbedtls_ssl_write().
-    int r = mbedtls_ssl_read(&_ssl, buf, size);
-    if (r >= 0) {
-      total += r;
-    } else if (r == MBEDTLS_ERR_SSL_WANT_READ) {
-      // Log internal state after WANT_READ to understand the bug
-      if (_readWantCnt == 0 || _readWantCnt % 5 == 0) {
-        Serial.printf("TLS: ssl_read=WANT_READ state=%d in_offt=%p in_msglen=%d in_left=%d in_hslen=%d t_in=%p out_left=%d\n",
+    // Read remaining from mbedtls
+    if (size > 0) {
+      int r = mbedtls_ssl_read(&_ssl, buf, size);
+      if (r >= 0) {
+        total += r;
+      } else if (r == MBEDTLS_ERR_SSL_WANT_READ) {
+        // Log internal state after WANT_READ to understand the bug
+        if (_readWantCnt == 0 || _readWantCnt % 5 == 0) {
+        // Dump first bytes of in_buf to check for lingering decrypted data
+        uint32_t ib0 = 0, ib4 = 0, ib8 = 0;
+        if (_ssl.in_buf) {
+          ib0 = _ssl.in_buf[0] | (_ssl.in_buf[1]<<8) | (_ssl.in_buf[2]<<16) | (_ssl.in_buf[3]<<24);
+          ib4 = _ssl.in_buf[4] | (_ssl.in_buf[5]<<8) | (_ssl.in_buf[6]<<16) | (_ssl.in_buf[7]<<24);
+          ib8 = _ssl.in_buf[8] | (_ssl.in_buf[9]<<8) | (_ssl.in_buf[10]<<16) | (_ssl.in_buf[11]<<24);
+        }
+        Serial.printf("TLS: ssl_read=WANT_READ state=%d off=%p msglen=%d left=%d hslen=%d t_in=%p ol=%d hs=%p type=%d inbuf=%08x %08x %08x\n",
                       _ssl.state, (void*)_ssl.in_offt, _ssl.in_msglen,
                       _ssl.in_left, _ssl.in_hslen, (void*)_ssl.transform_in,
-                      _ssl.out_left);
+                      _ssl.out_left, (void*)_ssl.handshake, _ssl.in_msgtype,
+                      (unsigned)ib0, (unsigned)ib4, (unsigned)ib8);
       }
       // Retry with short delays.  Unlike the original heuristic that only
       // retried when TCP had visible data, we always retry because bio_recv
