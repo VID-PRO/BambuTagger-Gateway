@@ -252,6 +252,10 @@ size_t TlsWiFiClient::write(const uint8_t *buf, size_t size) {
   if (r != (int)size) {
     Serial.printf("TLS: ssl_write partial: %d of %u\n", r, (unsigned)size);
   }
+  // mbedTLS server state sometimes regresses after write.  Force it back
+  // so the next mbedtls_ssl_read() decrypts application data instead of
+  // attempting to resume the handshake.
+  _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
   return r;
 }
 
@@ -292,6 +296,9 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
   }
   // Read remaining from mbedtls
   if (size > 0) {
+    // Defensive: ensure state hasn't regressed (mbedTLS port may revert
+    // to SERVER_CHANGE_CIPHER_SPEC after a prior write).
+    _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
     int r = mbedtls_ssl_read(&_ssl, buf, size);
     if (r >= 0) {
       total += r;
