@@ -33,9 +33,9 @@ static const char _PAGE_SETUP2[] PROGMEM = R"html(
 <header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
 <nav>
 <a href="/">Dashboard</a>
+<a href="/setup" class="active">Guide</a>
 <a href="/config/settings">Printer</a>
 <a href="/config/wifi">WiFi</a>
-<a href="/setup" class="active">Guide</a>
 <a href="/config/ota">Update</a>
 </nav>
 <div class="wrapper">

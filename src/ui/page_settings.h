@@ -17,10 +17,10 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
 <header><div class="logo"><img src="/Logo/bambutagger.png" alt="B"><h1>BambuTagger-Gateway</h1></div></header>
 <nav>
 <a href="/">Dashboard</a>
+<a href="/setup">Guide</a>
 <a href="/config/settings" class="active">Printer</a>
 <a href="/config/wifi">WiFi</a>
-<a href="/setup">Guide</a>
-<a href="/config/ota">Update</a>
+≈<a href="/config/ota">Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
