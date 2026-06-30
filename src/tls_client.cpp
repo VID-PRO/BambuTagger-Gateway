@@ -252,9 +252,7 @@ size_t TlsWiFiClient::write(const uint8_t *buf, size_t size) {
   if (r != (int)size) {
     Serial.printf("TLS: ssl_write partial: %d of %u\n", r, (unsigned)size);
   }
-  // mbedTLS server state sometimes regresses after write.  Force it back
-  // so the next mbedtls_ssl_read() decrypts application data instead of
-  // attempting to resume the handshake.
+  // Force state back to HANDSHAKE_OVER (mbedTLS server may regress).
   _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
   return r;
 }
@@ -298,11 +296,23 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
   if (size > 0) {
     // Defensive: ensure state hasn't regressed (mbedTLS port may revert
     // to SERVER_CHANGE_CIPHER_SPEC after a prior write).
-    _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
+    if (_ssl.state != MBEDTLS_SSL_HANDSHAKE_OVER) {
+      Serial.printf("TLS: forcing state from %d to HANDSHAKE_OVER\n", _ssl.state);
+      _ssl.state = MBEDTLS_SSL_HANDSHAKE_OVER;
+    }
+    // No pending output fix needed — bio_send now retries until all bytes
+    // are written, so out_left is always 0 after mbedtls_ssl_write().
     int r = mbedtls_ssl_read(&_ssl, buf, size);
     if (r >= 0) {
       total += r;
     } else if (r == MBEDTLS_ERR_SSL_WANT_READ) {
+      // Log internal state after WANT_READ to understand the bug
+      if (_readWantCnt == 0 || _readWantCnt % 5 == 0) {
+        Serial.printf("TLS: ssl_read=WANT_READ state=%d in_offt=%p in_msglen=%d in_left=%d in_hslen=%d t_in=%p out_left=%d\n",
+                      _ssl.state, (void*)_ssl.in_offt, _ssl.in_msglen,
+                      _ssl.in_left, _ssl.in_hslen, (void*)_ssl.transform_in,
+                      _ssl.out_left);
+      }
       // Retry with short delays.  Unlike the original heuristic that only
       // retried when TCP had visible data, we always retry because bio_recv
       // may have already consumed a TLS record from TCP into mbedTLS's
@@ -409,7 +419,21 @@ int TlsWiFiClient::bio_send(void *ctx, const unsigned char *buf, size_t len) {
     memcpy(c->_sndDumpBuf + c->_sndDumpLen, buf, cp);
     c->_sndDumpLen += cp;
   }
-  int r = c->_tcp->write(buf, len);
-  if (r > 0) return r;
-  return MBEDTLS_ERR_SSL_WANT_WRITE;
+  // Retry until all bytes are written.  WiFiClient::write() may return fewer
+  // bytes than requested when the lwIP send buffer is full; returning
+  // WANT_WRITE to mbedTLS leaves out_left > 0, causing every subsequent
+  // mbedtls_ssl_read() to return WANT_READ (because it tries to flush
+  // output first).
+  size_t total = 0;
+  while (total < len) {
+    int r = c->_tcp->write(buf + total, len - total);
+    if (r > 0) {
+      total += (size_t)r;
+    } else {
+      if (!c->_tcp->connected()) return MBEDTLS_ERR_SSL_CONN_EOF;
+      // TCP send buffer full — yield and retry
+      delay(1);
+    }
+  }
+  return (int)len;
 }
