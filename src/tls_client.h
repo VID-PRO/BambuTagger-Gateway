@@ -25,6 +25,7 @@ public:
   int readWantCnt() { return _readWantCnt; }
   int readCloseNotifyCnt() { return _readCloseNotify; }
   void tcpSetNoDelay(bool nodelay) { if (_tcp) _tcp->setNoDelay(nodelay); }
+  void clearKeyInHardware();
   void feedData(uint8_t b) { _feedBuf[_feedLen++] = b; }
   void bufferReadData(const uint8_t *data, size_t len) {
     // Only store if buffer is empty — otherwise data from read() takes priority

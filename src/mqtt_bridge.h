@@ -52,6 +52,9 @@ public:
 
 private:
   WiFiClientSecure *_upTcp = nullptr;
+#ifdef ESP32
+  mbedtls_ssl_context *_upSslCtx = nullptr;
+#endif
   PubSubClient _pubsub;
   WiFiServer _localServer;
   WiFiServer _tlsServer;

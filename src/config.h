@@ -48,7 +48,7 @@ struct GatewayConfig {
 // Limits
 #define MAX_MQTT_CLIENTS      8
 #define MAX_TCP_CLIENTS       6
-#define MQTT_BUFFER_SIZE      2048
+#define MQTT_BUFFER_SIZE      20480
 
 // MQTT topics
 #define MQTT_REPORT_TOPIC     "device/%s/report"

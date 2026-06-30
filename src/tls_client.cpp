@@ -3,6 +3,8 @@
 #include <mbedtls/error.h>
 #include <mbedtls/cipher.h>
 #include <mbedtls/ssl_internal.h>
+#include <aes/esp_aes.h>
+#include <aes/esp_aes_gcm.h>
 
 #define TAG "TLS"
 
@@ -308,31 +310,23 @@ size_t TlsWiFiClient::write(const uint8_t *buf, size_t size) {
   _tcp->write(ct_buf, ctlen);
   _tcp->flush();
 
-  // Invalidate both contexts' key_in_hardware flag. The ESP32 has one AES
-  // hardware unit shared between encrypt and decrypt contexts; the driver's
-  // key_in_hardware flag is per-context but the hardware key register is
-  // shared, so after an encryption the decryption key in hardware is evicted
-  // (and vice versa).  By clearing both flags we force the driver to reload
-  // the key before the next AES operation, regardless of direction.
-  // esp_gcm_context layout (32-bit Xtensa, offsets may vary by toolchain):
-  //   H[16] ghash[16] J0[16]  0-47
-  //   HL[16] HH[16]           48-303
-  //   ori_j0[16] iv* iv_len   304-327
-  //   aad_len data_len mode   328-343
-  //   aad*                    344-347
-  //   aes_ctx:                348+
-  //     key_bytes [1]         348
-  //     key_in_hardware [1]   349
-  //     key[32]               350-381
-  //   gcm_state               382-385
+  // Invalidate key_in_hardware for both transforms so the next read/write
+  // on this downstream context forces a hardware reload.
   for (auto *t : { _ssl.transform_in, _ssl.transform_out }) {
-    if (t && t->cipher_ctx_dec.cipher_ctx) {
-      volatile uint8_t *p = (volatile uint8_t *)t->cipher_ctx_dec.cipher_ctx;
-      p[349] = 0;
-    }
-    if (t && t->cipher_ctx_enc.cipher_ctx) {
-      volatile uint8_t *p = (volatile uint8_t *)t->cipher_ctx_enc.cipher_ctx;
-      p[349] = 0;
+    if (!t) continue;
+    for (auto *ctx : { &t->cipher_ctx_dec, &t->cipher_ctx_enc }) {
+      if (!ctx->cipher_info || !ctx->cipher_ctx) continue;
+      mbedtls_cipher_type_t ct2 = ctx->cipher_info->type;
+      if (ct2 < MBEDTLS_CIPHER_AES_128_ECB || ct2 > MBEDTLS_CIPHER_AES_256_KWP)
+        continue;
+      if (ctx->cipher_info->mode == MBEDTLS_MODE_GCM ||
+          ctx->cipher_info->mode == MBEDTLS_MODE_CCM) {
+        esp_gcm_context *gcm = (esp_gcm_context *)ctx->cipher_ctx;
+        gcm->aes_ctx.key_in_hardware = 0;
+      } else {
+        esp_aes_context *aes = (esp_aes_context *)ctx->cipher_ctx;
+        aes->key_in_hardware = 0;
+      }
     }
   }
 
@@ -383,6 +377,12 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
   }
     // Read remaining from mbedtls
     if (size > 0) {
+      // Skip the mbedtls_ssl_read call entirely if no data exists at any layer.
+      // This avoids a WANT_READ round-trip when the connection is idle.
+      if (_ssl.in_left == 0 && mbedtls_ssl_get_bytes_avail(&_ssl) == 0 &&
+          (_tcp && _tcp->available() == 0)) {
+        return total > 0 ? (int)total : -1;
+      }
       int r = mbedtls_ssl_read(&_ssl, buf, size);
       if (r >= 0) {
         total += r;
@@ -402,12 +402,11 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
                       _ssl.out_left, (void*)_ssl.handshake, _ssl.in_msgtype,
                       (unsigned)ib0, (unsigned)ib4, (unsigned)ib8);
       }
-      // Retry with short delays.  Unlike the original heuristic that only
-      // retried when TCP had visible data, we always retry because bio_recv
-      // may have already consumed a TLS record from TCP into mbedTLS's
-      // internal buffers — mbedTLS needs a second call to finish processing.
+      // Retry only if mbedTLS has buffered record data or TCP has raw data.
+      // If neither has data, no point retrying — nothing will arrive.
       bool gotData = false;
-      for (int retry = 0; retry < 50; retry++) {
+      int maxRetry = (_ssl.in_left > 0 || (_tcp && _tcp->available() > 0)) ? 10 : 0;
+      for (int retry = 0; retry < maxRetry; retry++) {
         delay(5);
         r = mbedtls_ssl_read(&_ssl, buf, size);
         if (r >= 0) { total += r; gotData = true; break; }
@@ -452,6 +451,26 @@ void TlsWiFiClient::flushWrites() {
   // Flush the TCP send buffer so the client receives pending TLS records
   if (_tcp) _tcp->flush();
 }
+void TlsWiFiClient::clearKeyInHardware() {
+  for (auto *t : { _ssl.transform_in, _ssl.transform_out }) {
+    if (!t) continue;
+    for (auto *ctx : { &t->cipher_ctx_dec, &t->cipher_ctx_enc }) {
+      if (!ctx->cipher_info || !ctx->cipher_ctx) continue;
+      mbedtls_cipher_type_t ct = ctx->cipher_info->type;
+      if (ct < MBEDTLS_CIPHER_AES_128_ECB || ct > MBEDTLS_CIPHER_AES_256_KWP)
+        continue;
+      if (ctx->cipher_info->mode == MBEDTLS_MODE_GCM ||
+          ctx->cipher_info->mode == MBEDTLS_MODE_CCM) {
+        esp_gcm_context *gcm = (esp_gcm_context *)ctx->cipher_ctx;
+        gcm->aes_ctx.key_in_hardware = 0;
+      } else {
+        esp_aes_context *aes = (esp_aes_context *)ctx->cipher_ctx;
+        aes->key_in_hardware = 0;
+      }
+    }
+  }
+}
+
 uint8_t TlsWiFiClient::connected() {
   if (!_ok && _tcp) return _tcp->connected();
   return _ok && _tcp && _tcp->connected();

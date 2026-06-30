@@ -3,6 +3,56 @@
 #include <ESPmDNS.h>
 #include <mbedtls/base64.h>
 #include <Preferences.h>
+#include <mbedtls/ssl_internal.h>
+#include <mbedtls/cipher.h>
+#include <aes/esp_aes.h>
+#include <aes/esp_aes_gcm.h>
+
+// Derived class to access WiFiClientSecure's protected sslclient member
+struct UpstreamClient : public WiFiClientSecure {
+  mbedtls_ssl_context *sslCtx() { return &sslclient->ssl_ctx; }
+};
+
+// Invalidate AES key-in-hardware flags for all transforms in the given SSL
+// context.  The ESP32's single AES hardware register is shared across all
+// TLS contexts.  When one context operates it loads its key into the
+// shared register and sets its own key_in_hardware=1; the other context's
+// flag stays 1 (stale) so it skips the reload on the next operation and
+// silently uses the wrong key.
+//
+// Instead of loading a key (which leaves key_in_hardware=1, immediately
+// stale), we clear key_in_hardware to 0.  This forces the next AES
+// operation to reload from the stored context, regardless of which key is
+// currently in the hardware register.
+//
+// IMPORTANT: only AES-based ciphers (GCM, CCM, CBC, etc.) go through the
+// shared hardware register.  Non-AES ciphers (ChaCha20-Poly1305) are
+// skipped to avoid corrupting their different cipher_ctx struct layout.
+static void invalidateAesKeys(mbedtls_ssl_context *ssl) {
+  if (!ssl) return;
+  for (auto *t : { ssl->transform_in, ssl->transform_out }) {
+    if (!t) continue;
+    for (auto *ctx : { &t->cipher_ctx_dec, &t->cipher_ctx_enc }) {
+      if (!ctx->cipher_info || !ctx->cipher_ctx) continue;
+      mbedtls_cipher_type_t ct = ctx->cipher_info->type;
+      // Only AES-based ciphers use the shared hardware AES key register.
+      // Non-AES ciphers (e.g. ChaCha20-Poly1305) have a different
+      // cipher_ctx layout and must not be cast to esp_gcm_context.
+      if (ct < MBEDTLS_CIPHER_AES_128_ECB || ct > MBEDTLS_CIPHER_AES_256_KWP)
+        continue;
+      if (ctx->cipher_info->mode == MBEDTLS_MODE_GCM ||
+          ctx->cipher_info->mode == MBEDTLS_MODE_CCM) {
+        // GCM/CCM: cipher_ctx is esp_gcm_context with embedded aes_ctx
+        esp_gcm_context *gcm = (esp_gcm_context *)ctx->cipher_ctx;
+        gcm->aes_ctx.key_in_hardware = 0;
+      } else {
+        // Non-AEAD AES (CBC, ECB, CTR, etc.): cipher_ctx is esp_aes_context
+        esp_aes_context *aes = (esp_aes_context *)ctx->cipher_ctx;
+        aes->key_in_hardware = 0;
+      }
+    }
+  }
+}
 #endif
 
 static char reportTopic[64];
@@ -77,6 +127,9 @@ void MqttBridge::begin(GatewayConfig *cfg) {
   snprintf(requestTopic, sizeof(requestTopic), MQTT_REQUEST_TOPIC, _cfg->printerSerial);
   snprintf(localReportTopic, sizeof(localReportTopic), MQTT_REPORT_TOPIC, _cfg->gatewaySerial);
   snprintf(localRequestTopic, sizeof(localRequestTopic), MQTT_REQUEST_TOPIC, _cfg->gatewaySerial);
+
+  Serial.printf("MQTT: topics report='%s' request='%s' localReport='%s' localRequest='%s'\n",
+                reportTopic, requestTopic, localReportTopic, localRequestTopic);
 
   _localServer.begin();
   _localServer.setNoDelay(true);
@@ -157,6 +210,26 @@ void MqttBridge::loop() {
       if (now - _lastReconnect > 5000) {
         _lastReconnect = now;
         if (connectUpstream()) {
+#ifdef ESP32
+          invalidateAesKeys(_upSslCtx);
+#endif
+          char sn[64];
+          strncpy(sn, _cfg->printerSerial, sizeof(sn) - 1);
+          sn[sizeof(sn) - 1] = 0;
+          const char *extraTopics[] = {
+            "device/%s/report",
+            "device/%s/status",
+            "device/%s/info",
+            "device/%s/telemetry",
+            "device/%s/push",
+            "%s/report",
+            "report/%s",
+          };
+          for (auto *fmt : extraTopics) {
+            char topic[64];
+            snprintf(topic, sizeof(topic), fmt, sn);
+            _pubsub.subscribe(topic, 0);
+          }
           for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
             if (_clients[i].active) {
               for (uint8_t s = 0; s < _clients[i].subCount; s++) {
@@ -175,6 +248,22 @@ void MqttBridge::loop() {
       }
     }
   } else {
+#ifdef ESP32
+    // Clear upstream AES key in hardware before any upstream TLS operation
+    invalidateAesKeys(_upSslCtx);
+#endif
+    static unsigned long lastUpDbg = 0;
+    unsigned long nowDbg = millis();
+    if (nowDbg - lastUpDbg > 3000) {
+      lastUpDbg = nowDbg;
+      int upAvail = _upTcp ? _upTcp->available() : -1;
+      int upBytesAvail = _upSslCtx ? mbedtls_ssl_get_bytes_avail(_upSslCtx) : -1;
+      int upInLeft = _upSslCtx ? _upSslCtx->in_left : -1;
+      int upState = _upSslCtx ? _upSslCtx->state : -1;
+      Serial.printf("UP: conn=%d st=%d av=%d dec=%d inL=%d sslSt=%d\n",
+                    _pubsub.connected(), _pubsub.state(),
+                    upAvail, upBytesAvail, upInLeft, upState);
+    }
     _pubsub.loop();
   }
 
@@ -191,8 +280,19 @@ void MqttBridge::loop() {
   }
   if (active > 0 && now - lastDiag > 10000) {
     lastDiag = now;
-    Serial.printf("MQTT: %d active client(s)\n", active);
+    Serial.printf("MQTT: %d active client(s) upConn=%d\n", active, _pubsub.connected());
   }
+
+#ifdef ESP32
+  // Clear downstream AES keys so each client reloads after upstream ops
+  for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
+    if (!_clients[i].active) continue;
+    if (_clients[i].isTls) {
+      TlsWiFiClient *tls = (TlsWiFiClient *)_clients[i].client;
+      tls->clearKeyInHardware();
+    }
+  }
+#endif
 
   for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
     if (!_clients[i].active) continue;
@@ -241,7 +341,12 @@ MqttStatus MqttBridge::getStatus() {
 bool MqttBridge::connectUpstream() {
   if (!_cfg) return false;
   delete _upTcp;
+#ifdef ESP32
+  _upTcp = new UpstreamClient();
+  _upSslCtx = nullptr;
+#else
   _upTcp = new WiFiClientSecure();
+#endif
   _upTcp->setInsecure();
   _upTcp->setTimeout(10000);
 
@@ -263,9 +368,18 @@ bool MqttBridge::connectUpstream() {
   }
 #endif
   if (!_upTcp->connect(host, MQTT_PRINTER_PORT)) {
+#ifdef ESP32
+    delete _upTcp; _upTcp = nullptr; _upSslCtx = nullptr;
+#else
     delete _upTcp; _upTcp = nullptr;
+#endif
     return false;
   }
+#ifdef ESP32
+  _upSslCtx = static_cast<UpstreamClient*>(_upTcp)->sslCtx();
+  const char *upCs = mbedtls_ssl_get_ciphersuite(_upSslCtx);
+  Serial.printf("TLS: upstream cipher=%s\n", upCs ? upCs : "?");
+#endif
   _pubsub.setClient(*_upTcp);
 
   char willTopic[64];
@@ -313,6 +427,7 @@ static bool topicMatchesSub(const String &topic, const String &sub) {
 }
 
 void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int len) {
+  Serial.printf("MQTT: upstream publish topic=%s len=%u\n", topic, len);
   // Translate upstream topic (printer serial) to local topic (gateway serial)
   String t = topic;
   if (_cfg && strcmp(_cfg->printerSerial, _cfg->gatewaySerial) != 0) {
@@ -443,6 +558,11 @@ void MqttBridge::handleClient(int idx) {
   MqttClientCtx &cl = _clients[idx];
   WiFiClient &c = *cl.client;
 
+#ifdef ESP32
+  // Clear upstream AES keys so publish/subscribe/unsubscribe use correct keys
+  invalidateAesKeys(_upSslCtx);
+#endif
+
   uint8_t header;
   int headerRead = c.read();
   if (headerRead < 0) { return; }
@@ -543,9 +663,9 @@ void MqttBridge::handleClient(int idx) {
       }
 
       uint32_t payloadLen = remaining - 2 - tlen - (qos > 0 ? 2 : 0);
-      uint8_t payload[MQTT_BUFFER_SIZE];
       uint32_t toRead = (payloadLen > MQTT_BUFFER_SIZE) ? MQTT_BUFFER_SIZE : payloadLen;
-      if (toRead > 0 && !readBytes(c, payload, toRead)) return;
+      uint8_t *payload = new uint8_t[toRead ? toRead : 1];
+      if (toRead > 0 && !readBytes(c, payload, toRead)) { delete[] payload; return; }
 
       // Fake printer responses when no real printer is connected.
       if (!_pubsub.connected()) {
@@ -606,7 +726,9 @@ void MqttBridge::handleClient(int idx) {
         }
       }
 
-      _pubsub.publish(requestTopic, payload, toRead, false);
+      bool pubOk = _pubsub.publish(requestTopic, payload, toRead, false);
+      Serial.printf("MQTT: pub topic='%s' len=%u ok=%d\n",
+                    requestTopic, toRead, pubOk);
 
       if (qos == 1) {
         uint8_t ackBuf[2] = {(uint8_t)(pid >> 8), (uint8_t)(pid & 0xFF)};
@@ -614,6 +736,7 @@ void MqttBridge::handleClient(int idx) {
         writeRemainingLength(c, 2);
         c.write(ackBuf, 2);
       }
+      delete[] payload;
       break;
     }
 
@@ -652,7 +775,9 @@ void MqttBridge::handleClient(int idx) {
           if (upTopic.startsWith(pfx))
             upTopic = String("device/") + _cfg->printerSerial + upTopic.substring(pfx.length());
         }
-        _pubsub.subscribe(upTopic.c_str(), subOpts & 0x03);
+        bool subOk = _pubsub.subscribe(upTopic.c_str(), subOpts & 0x03);
+        Serial.printf("MQTT: sub topic='%s' -> up='%s' ok=%d\n",
+                      subTopic.c_str(), upTopic.c_str(), subOk);
       }
 
       sendSubAck(c, pid, topicCount);
@@ -798,7 +923,17 @@ void MqttBridge::sendPublish(WiFiClient &c, const String &topic,
   for (uint16_t i = 0; i < tlen; i++) {
     c.write((uint8_t)topic[i]);
   }
-  if (len > 0) c.write(payload, len);
+  if (len > 0) {
+    constexpr size_t CHUNK = 2048;
+    const uint8_t *p = payload;
+    uint32_t rem = len;
+    while (rem > 0) {
+      size_t n = (rem > CHUNK) ? CHUNK : rem;
+      c.write(p, n);
+      p += n;
+      rem -= n;
+    }
+  }
 }
 
 // ------------------------------------------------------------------
@@ -808,7 +943,7 @@ bool MqttBridge::readByte(WiFiClient &c, uint8_t &b) {
   int v = c.read();
   if (v >= 0) { b = (uint8_t)v; return true; }
   // Retry with short delays — gives TLS data time to arrive and decrypt
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 10; i++) {
     delay(5);
     v = c.read();
     if (v >= 0) { b = (uint8_t)v; return true; }
