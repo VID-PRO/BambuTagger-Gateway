@@ -4,6 +4,10 @@ Multi-client bridge for Bambu Lab printers — breaks the 3-connection limit by 
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G8M220JASY)
 
+<p align="center">
+<img alt="BambuTagger" src="Pics/status.png" width="400">
+</p>
+
 ---
 
 ## Quick Start
