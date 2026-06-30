@@ -443,15 +443,25 @@ void MqttBridge::handleClient(int idx) {
   uint8_t header;
   int headerRead = -1;
   int waited = 0;
-  while (waited <= 10) {
-    if (!c.connected()) break;
+  while (waited <= 50) {
+    if (!c.connected()) {
+      Serial.printf("MQTT: client %d disconnected (waited %dms)\n", idx, waited * 20);
+      break;
+    }
     headerRead = c.read();
     if (headerRead >= 0) break;
     if (waited > 0) delay(20);
     waited++;
   }
   if (headerRead < 0) {
-    Serial.printf("MQTT: client %d read failed (waited %dms), disconnecting\n", idx, waited * 20);
+    if (cl.isTls) {
+      TlsWiFiClient *tls = (TlsWiFiClient *)&c;
+      Serial.printf("MQTT: client %d read failed (waited %dms) ok=%d hs=%d tcpOK=%d wantCnt=%d closeNotify=%d\n",
+                    idx, waited * 20, tls->isOk(), tls->handshakeDone(), c.connected(),
+                    tls->readWantCnt(), tls->readCloseNotifyCnt());
+    } else {
+      Serial.printf("MQTT: client %d read failed (waited %dms)\n", idx, waited * 20);
+    }
     disconnectClient(idx);
     return;
   }
@@ -472,17 +482,44 @@ void MqttBridge::handleClient(int idx) {
 
   switch (type) {
     case 1: { // CONNECT
-      uint8_t buf[32];
+      // Dump CONNECT variable header + payload
+      uint8_t *connBuf = new uint8_t[remaining + 1];
+      size_t connPos = 0;
       while (remaining > 0) {
-        uint32_t chunk = (remaining > sizeof(buf)) ? sizeof(buf) : remaining;
-        if (!readBytes(c, buf, chunk)) return;
+        uint32_t chunk = (remaining > 32) ? 32 : remaining;
+        if (!readBytes(c, connBuf + connPos, chunk)) { delete[] connBuf; return; }
+        connPos += chunk;
         remaining -= chunk;
       }
-      sendConnAck(c, false, 0);
-      Serial.printf("MQTT: ConnAck sent to client %d\n", idx);
+      connBuf[connPos] = 0;
+
+      // Parse CONNECT fields
+      if (connPos >= 6) {
+        int off = 0;
+        uint16_t pnLen = (connBuf[off] << 8) | connBuf[off+1]; off += 2;
+        String protoName = String((char *)(connBuf + off), pnLen); off += pnLen;
+        uint8_t level = connBuf[off++];
+        uint8_t flags = connBuf[off++];  // bit 0: reserved, 1: clean, 2: will, 3: willQos1, 4: willQos2, 5: willRetain, 6: pwd, 7: user
+        uint16_t keepalive = (connBuf[off] << 8) | connBuf[off+1]; off += 2;
+        // Client ID
+        uint16_t cidLen = connPos > off + 1 ? (connBuf[off] << 8) | connBuf[off+1] : 0; off += 2;
+        String clientId;
+        if (cidLen > 0 && off + cidLen <= connPos) {
+          clientId = String((char *)(connBuf + off), cidLen); off += cidLen;
+        }
+        Serial.printf("MQTT: CONNECT proto=%s level=%u flags=0x%02x keepalive=%u cid='%s'\n",
+                      protoName.c_str(), level, flags, keepalive, clientId.c_str());
+      }
+      delete[] connBuf;
+
+      size_t wret = sendConnAck(c, false, 0);
+      Serial.printf("MQTT: ConnAck write returned %u bytes\n", (unsigned)wret);
       // Flush pending TLS writes so the client receives ConnAck promptly
       if (cl.isTls) {
         ((TlsWiFiClient *)&c)->flushWrites();
+        delay(50); // give lwIP time to push data to the wire
+        Serial.printf("MQTT: ConnAck flush done, avail=%d connected=%d\n",
+                      c.available(), c.connected());
       }
       break;
     }
@@ -716,9 +753,9 @@ void MqttBridge::handleClient(int idx) {
 // ------------------------------------------------------------------
 // MQTT packet writers
 // ------------------------------------------------------------------
-void MqttBridge::sendConnAck(WiFiClient &c, bool sp, uint8_t rc) {
+size_t MqttBridge::sendConnAck(WiFiClient &c, bool sp, uint8_t rc) {
   uint8_t pkt[4] = {0x20, 0x02, (uint8_t)(sp ? 1 : 0), rc};
-  c.write(pkt, 4);
+  return c.write(pkt, 4);
 }
 
 void MqttBridge::sendSubAck(WiFiClient &c, uint16_t pid, uint8_t count) {

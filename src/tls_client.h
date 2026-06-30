@@ -18,7 +18,10 @@ public:
                 const uint8_t *keyDer, size_t keyLen);
   int continueHandshake();  // 1=done, 0=busy, -1=error
   bool isTls() { return _ok && _tcp; }
+  bool isOk() { return _ok; }
   bool handshakeDone() { return _hsDone; }
+  int readWantCnt() { return _readWantCnt; }
+  int readCloseNotifyCnt() { return _readCloseNotify; }
   void tcpSetNoDelay(bool nodelay) { if (_tcp) _tcp->setNoDelay(nodelay); }
   void feedData(uint8_t b) { _feedBuf[_feedLen++] = b; }
 
@@ -44,6 +47,8 @@ private:
   int _hsRetries = 0;
   unsigned long _hsStart = 0;
   int _hsState = 0;
+  int _readWantCnt = 0;
+  int _readCloseNotify = 0;
   uint16_t _dumpLen = 0;
   uint8_t _dumpBuf[128];
   uint16_t _sndDumpLen = 0;

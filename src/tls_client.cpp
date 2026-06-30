@@ -53,6 +53,8 @@ bool TlsWiFiClient::begin(WiFiClient *tcp, const char *certPem, const char *keyP
   _ok = true;
   _dumpLen = 0;
   _sndDumpLen = 0;
+  _readWantCnt = 0;
+  _readCloseNotify = 0;
   return true;
 }
 
@@ -129,6 +131,8 @@ bool TlsWiFiClient::beginDer(WiFiClient *tcp, const uint8_t *certDer, size_t cer
   _ok = true;
   _dumpLen = 0;
   _sndDumpLen = 0;
+  _readWantCnt = 0;
+  _readCloseNotify = 0;
   return true;
 }
 
@@ -218,7 +222,16 @@ size_t TlsWiFiClient::write(uint8_t b) { return write(&b, 1); }
 size_t TlsWiFiClient::write(const uint8_t *buf, size_t size) {
   if (!_ok || !_hsDone) return 0;
   int r = mbedtls_ssl_write(&_ssl, buf, size);
-  if (r < 0) { if (r != MBEDTLS_ERR_SSL_WANT_WRITE) _ok = false; return 0; }
+  if (r < 0) {
+    if (r != MBEDTLS_ERR_SSL_WANT_WRITE) {
+      Serial.printf("TLS: ssl_write error: -0x%x\n", -r);
+      _ok = false;
+    }
+    return 0;
+  }
+  if (r != (int)size) {
+    Serial.printf("TLS: ssl_write partial: %d of %u\n", r, (unsigned)size);
+  }
   return r;
 }
 
@@ -241,8 +254,8 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
   if (!_ok || !_hsDone) { return -1; }
   int r = mbedtls_ssl_read(&_ssl, buf, size);
   if (r < 0) {
-    if (r == MBEDTLS_ERR_SSL_WANT_READ) return -1;
-    if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) { return -1; }
+    if (r == MBEDTLS_ERR_SSL_WANT_READ) { _readWantCnt++; return -1; }
+    if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) { _readCloseNotify++; return -1; }
     _ok = false;
     return -1;
   }
@@ -250,13 +263,14 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
 }
 
 int TlsWiFiClient::peek() { return -1; }
-void TlsWiFiClient::flush() {}
+void TlsWiFiClient::flush() {
+  // Flush the underlying TCP send buffer (forces lwIP tcp_output)
+  if (_tcp) _tcp->flush();
+}
 void TlsWiFiClient::flushWrites() {
   if (!_ok || !_hsDone) return;
-  // Force pending TLS writes to be sent by doing a non-blocking read.
-  // mbedtls flushes its write buffer before reading the next record.
-  uint8_t tmp;
-  mbedtls_ssl_read(&_ssl, &tmp, 1);
+  // Flush the TCP send buffer so the client receives pending TLS records
+  if (_tcp) _tcp->flush();
 }
 uint8_t TlsWiFiClient::connected() {
   if (!_ok && _tcp) return _tcp->connected();

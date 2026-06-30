@@ -85,7 +85,7 @@ private:
   static bool readBytes(WiFiClient &c, uint8_t *buf, uint32_t len);
   static void writeRemainingLength(WiFiClient &c, uint32_t len);
 
-  void sendConnAck(WiFiClient &c, bool sp, uint8_t rc);
+  size_t sendConnAck(WiFiClient &c, bool sp, uint8_t rc);
   void sendSubAck(WiFiClient &c, uint16_t pid, uint8_t count);
   void sendUnsubAck(WiFiClient &c, uint16_t pid);
   void sendPingResp(WiFiClient &c);
