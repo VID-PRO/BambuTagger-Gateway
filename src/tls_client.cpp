@@ -303,19 +303,20 @@ int TlsWiFiClient::read(uint8_t *buf, size_t size) {
     if (r >= 0) {
       total += r;
     } else if (r == MBEDTLS_ERR_SSL_WANT_READ) {
-      // mbedtls_ssl_read may return WANT_READ because the TCP data hasn't
-      // arrived yet, or because mbedTLS needs a retry to complete processing
-      // of a partially-fetched TLS record. Retry with short delays.
+      // Retry with short delays.  Unlike the original heuristic that only
+      // retried when TCP had visible data, we always retry because bio_recv
+      // may have already consumed a TLS record from TCP into mbedTLS's
+      // internal buffers — mbedTLS needs a second call to finish processing.
       bool gotData = false;
-      for (int retry = 0; retry < 25; retry++) {
-        // Only delay+retry if there's plausible data available
-        if ((_tcp && _tcp->available() > 0) || _feedLen > 0) {
-          delay(5);
-          r = mbedtls_ssl_read(&_ssl, buf, size);
-          if (r >= 0) { total += r; gotData = true; break; }
-          if (r != MBEDTLS_ERR_SSL_WANT_READ) break;
-        } else {
-          break; // no TCP data and no fed data, don't spin
+      for (int retry = 0; retry < 50; retry++) {
+        delay(5);
+        r = mbedtls_ssl_read(&_ssl, buf, size);
+        if (r >= 0) { total += r; gotData = true; break; }
+        if (r != MBEDTLS_ERR_SSL_WANT_READ) {
+          char errbuf[128];
+          mbedtls_strerror(r, errbuf, sizeof(errbuf));
+          Serial.printf("TLS: ssl_read error (not WANT_READ): -0x%x (%s)\n", -r, errbuf);
+          break;
         }
       }
       if (!gotData) {
