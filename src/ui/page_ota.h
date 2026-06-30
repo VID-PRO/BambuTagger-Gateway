@@ -8,8 +8,6 @@ static const char _PAGE_OTA[] PROGMEM = R"html(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BambuTagger-Gateway — Update</title>
 <style>
-h1{color:#3fb950;font-size:1.4em;margin-bottom:4px}
-.sub{color:#8b949e;font-size:.85em;margin-bottom:22px}
 .ver{color:#8b949e;font-size:.95em;margin:9px 0 4px}
 .ver span{color:#f0f6fc;font-weight:bold}
 .ver .new{color:#3fb950}
@@ -35,8 +33,7 @@ static const char _PAGE_OTA2[] PROGMEM = R"html(
 </nav>
 <div class="wrapper">
 <div class="card">
-  <h1>Firmware Update</h1>
-  <p class="sub">Install the latest release from GitHub</p>
+  <h2>Firmware Update</h2>
   <div class="ver">Current: <span class="old" id="cur-ver">%%VERSION%%</span></div>
   <div class="ver">Latest:  <span class="new" id="lat-ver">&mdash;</span></div>
   <div id="status"></div>
