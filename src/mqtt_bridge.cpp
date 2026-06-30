@@ -353,51 +353,13 @@ int MqttBridge::acceptClient() {
       }
 
       if (peeked < 0) {
-        // No data from client — TCP probe. Keep the connection open and
-        // periodically poll for data in case the client is waiting for the
-        // server to send something first.
-        Serial.printf("MQTT: probe from %s:%d (keeping open, polling)\n",
+        // Probe from client — close immediately. The plugin's
+        // _bambu_network_bind_detect is a pure TCP connectivity check;
+        // no data exchange is needed for it to succeed.
+        Serial.printf("MQTT: probe from %s:%d (closing)\n",
                       raw.remoteIP().toString().c_str(), raw.remotePort());
-
-        // Poll for data for up to 3 seconds
-        unsigned long start = millis();
-        int polled = -1;
-        while (millis() - start < 3000) {
-          if (!raw.connected()) break;
-          if (raw.available() > 0) { polled = raw.read(); break; }
-          delay(25);
-        }
-
-        if (polled >= 0) {
-          Serial.printf("MQTT: probe got data after %lums, feeding to TLS\n",
-                        millis() - start);
-          WiFiClient *rawTcp = new WiFiClient(raw);
-          TlsWiFiClient *tls = new TlsWiFiClient();
-          if (!tls->beginDer(rawTcp, _certDer, _certLen, _keyDer, _keyLen)) {
-            Serial.println("MQTT: TLS beginDer failed");
-            delete tls;
-            return -1;
-          }
-          tls->feedData((uint8_t)polled);
-          for (int i = 0; i < MAX_MQTT_CLIENTS; i++) {
-            if (!_clients[i].active) {
-              _clients[i].client = tls;
-              _clients[i].active = true;
-              _clients[i].isTls = true;
-              _clients[i].subCount = 0;
-              _clients[i].lastPid = 0;
-              _clients[i].lastActivity = millis();
-              Serial.printf("MQTT: TLS client %d from %s\n", i, raw.remoteIP().toString().c_str());
-              return i;
-            }
-          }
-          delete tls;
-          return -2;
-        } else {
-          Serial.printf("MQTT: probe timed out after 3s, closing\n");
-          raw.stop();
-          return -1;
-        }
+        raw.stop();
+        return -1;
       }
 
       // Client sent data — restore the byte and do TLS

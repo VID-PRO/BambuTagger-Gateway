@@ -26,6 +26,8 @@ TcpProxy ftpsProxy("ftps", FTPS_LOCAL_PORT, PRINTER_HOST_DFLT, FTPS_PRINTER_PORT
 // plain MQTT for local tools. Both bridge to the printer via the upstream
 // PubSubClient connection.
 
+
+
 // SSDP (Simple Service Discovery Protocol) responder for Bambu Lab auto-detection.
 // Bambu Studio discovers printers via SSDP on UDP port 2021.
 // Real printers broadcast NOTIFY every ~10s to 239.255.255.250:2021.
@@ -53,8 +55,8 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
       "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
       "DevName.bambu.com: %s\r\n"
-      "DevConnect.bambu.com: lan\r\n"
-      "DevBind.bambu.com: free\r\n"
+        "DevConnect.bambu.com: lan\r\n"
+        "DevBind.bambu.com: free\r\n"
         "Devseclink.bambu.com: secure\r\n"
       "DevInf.bambu.com: wlan0\r\n"
       "DevVersion.bambu.com: 01.07.00.00\r\n"
@@ -73,8 +75,8 @@ static void buildSsdpmessage(const GatewayConfig *cfg, char *buf, size_t len, bo
       "Cache-Control: max-age=1800\r\n"
       "DevModel.bambu.com: %s\r\n"
       "DevName.bambu.com: %s\r\n"
-      "DevConnect.bambu.com: lan\r\n"
-      "DevBind.bambu.com: free\r\n"
+        "DevConnect.bambu.com: lan\r\n"
+        "DevBind.bambu.com: free\r\n"
         "Devseclink.bambu.com: secure\r\n"
       "DevInf.bambu.com: wlan0\r\n"
       "DevVersion.bambu.com: 01.07.00.00\r\n"
