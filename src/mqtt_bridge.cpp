@@ -252,18 +252,6 @@ void MqttBridge::loop() {
     // Clear upstream AES key in hardware before any upstream TLS operation
     invalidateAesKeys(_upSslCtx);
 #endif
-    static unsigned long lastUpDbg = 0;
-    unsigned long nowDbg = millis();
-    if (nowDbg - lastUpDbg > 3000) {
-      lastUpDbg = nowDbg;
-      int upAvail = _upTcp ? _upTcp->available() : -1;
-      int upBytesAvail = _upSslCtx ? mbedtls_ssl_get_bytes_avail(_upSslCtx) : -1;
-      int upInLeft = _upSslCtx ? _upSslCtx->in_left : -1;
-      int upState = _upSslCtx ? _upSslCtx->state : -1;
-      Serial.printf("UP: conn=%d st=%d av=%d dec=%d inL=%d sslSt=%d\n",
-                    _pubsub.connected(), _pubsub.state(),
-                    upAvail, upBytesAvail, upInLeft, upState);
-    }
     _pubsub.loop();
   }
 
@@ -427,7 +415,6 @@ static bool topicMatchesSub(const String &topic, const String &sub) {
 }
 
 void MqttBridge::onUpstreamMessage(char *topic, uint8_t *payload, unsigned int len) {
-  Serial.printf("MQTT: upstream publish topic=%s len=%u\n", topic, len);
   // Translate upstream topic (printer serial) to local topic (gateway serial)
   String t = topic;
   if (_cfg && strcmp(_cfg->printerSerial, _cfg->gatewaySerial) != 0) {
@@ -934,6 +921,12 @@ void MqttBridge::sendPublish(WiFiClient &c, const String &topic,
       rem -= n;
     }
   }
+#ifdef ESP32
+  // Downstream encrypt (c.write for TLS clients) loaded the downstream AES key
+  // into the shared hardware register, leaving upstream's key_in_hardware stale.
+  // Clear it so the next upstream AES op forces a reload.
+  invalidateAesKeys(_upSslCtx);
+#endif
 }
 
 // ------------------------------------------------------------------
