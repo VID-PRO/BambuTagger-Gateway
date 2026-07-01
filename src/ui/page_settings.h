@@ -20,7 +20,7 @@ static const char _PAGE_SETTINGS2[] PROGMEM = R"html(
 <a href="/setup">Guide</a>
 <a href="/config/settings" class="active">Printer</a>
 <a href="/config/wifi">WiFi</a>
-≈<a href="/config/ota">Update</a>
+<a href="/config/ota">Update</a>
 </nav>
 <div class="wrapper">
 <div class="card">
