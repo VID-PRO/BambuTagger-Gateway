@@ -3,11 +3,7 @@
 #include <ESPmDNS.h>
 #include <mbedtls/base64.h>
 #include <Preferences.h>
-#if __has_include(<mbedtls/ssl_misc.h>)
-#include <mbedtls/ssl_misc.h>
-#else
-#include <mbedtls/ssl_internal.h>
-#endif
+#include "mbedtls_compat.h"
 #include <mbedtls/cipher.h>
 #include <aes/esp_aes.h>
 #include <aes/esp_aes_gcm.h>
