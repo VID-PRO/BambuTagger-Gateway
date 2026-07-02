@@ -44,46 +44,48 @@ jobs:
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
-          pip install platformio --quiet
-          pip install intelhex --quiet
+          pip install platformio esptool --quiet
 
       - name: Build with PlatformIO
         run: |
           pio run -e esp32-s3
 
-      - name: Patch firmware.bin to QIO flash mode
-        run: |
-          python3 -c "
-          import sys
-          fw = '${{ github.workspace }}/.pio/build/esp32-s3/firmware.bin'
-          with open(fw, 'rb') as f:
-              data = bytearray(f.read())
-          if data[2] == 0x00:
-              print('Flash mode: QIO (correct)')
-          else:
-              old = data[2]
-              data[2] = 0x00
-              with open(fw, 'wb') as f:
-                  f.write(data)
-              print(f'Flash mode: patched from {old:#04x} to 0x00 (QIO)')
-          "
-
       - name: Copy and rename artefacts
         run: |
           mkdir -p build
-          cp "${{ github.workspace }}/.pio/build/esp32-s3/firmware.bin" \
-             build/BambuTagger-Gateway.ino.bin
+          cp "${{ github.workspace }}/.pio/build/esp32-s3/firmware.bin"         build/BambuTagger-Gateway.ino.bin
+          cp "${{ github.workspace }}/.pio/build/esp32-s3/bootloader.bin"       build/BambuTagger-Gateway.ino.bootloader.bin
+          cp "${{ github.workspace }}/.pio/build/esp32-s3/partitions.bin"        build/BambuTagger-Gateway.ino.partitions.bin
+
+          APP="${{ github.workspace }}/build/BambuTagger-Gateway.ino.bin"
+          BOOT="${{ github.workspace }}/build/BambuTagger-Gateway.ino.bootloader.bin"
+          PART="${{ github.workspace }}/build/BambuTagger-Gateway.ino.partitions.bin"
+          MERGED="${{ github.workspace }}/build/BambuTagger-Gateway_merged.bin"
+
+          esptool.py \
+            --chip esp32s3 \
+            merge_bin \
+            --output "$MERGED" \
+            --flash_mode qio \
+            --flash_freq 80m \
+            --flash_size 8MB \
+            0x1000   "$BOOT" \
+            0x8000   "$PART" \
+            0x10000  "$APP"
 
           echo "=== Build artefacts ==="
           ls -lh "${{ github.workspace }}/build/"
 
-      - name: Upload firmware artefact
+      - name: Upload firmware artefacts
         uses: actions/upload-artifact@v4
         with:
           name: BambuTagger-Gateway-firmware-${{ github.sha }}
           retention-days: 30
           path: |
             build/BambuTagger-Gateway.ino.bin
+            build/BambuTagger-Gateway.ino.bootloader.bin
+            build/BambuTagger-Gateway.ino.partitions.bin
+            build/BambuTagger-Gateway_merged.bin
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -93,18 +95,30 @@ jobs:
           generate_release_notes: true
           files: |
             build/BambuTagger-Gateway.ino.bin
+            build/BambuTagger-Gateway.ino.bootloader.bin
+            build/BambuTagger-Gateway.ino.partitions.bin
+            build/BambuTagger-Gateway_merged.bin
           body: |
             ## Flashing instructions
 
-            ### Via web UI (easiest)
-            Navigate to **Configuration → OTA Update** and upload the `.bin` file.
+            ### Easiest — merged binary (single file, address 0x00)
+            ```
+            esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+              write_flash 0x0 BambuTagger-Gateway_merged.bin
+            ```
 
-            ### Via esptool (USB)
-            ```bash
-            esptool.py --port /dev/ttyACM0 --baud 921600 \
-              write_flash --flash_mode qio 0x0 BambuTagger-Gateway.ino.bin
+            ### Manual — separate files
+            ```
+            esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+              write_flash \
+              0x1000   BambuTagger-Gateway.ino.bootloader.bin \
+              0x8000   BambuTagger-Gateway.ino.partitions.bin \
+              0x10000  BambuTagger-Gateway.ino.bin
             ```
 
             > **Board:** Seeed XIAO ESP32-S3 (or any ESP32-S3 module with ≥8 MB flash)
             > **Framework:** Arduino (PlatformIO)
-            > **Flash:** 8 MB, QIO 80 MHz
+            > **Flash:** 8 MB, QIO, 80 MHz
+
+            ### OTA Update
+            Upload `BambuTagger-Gateway.ino.bin` via the web interface (Configuration → OTA Update).
