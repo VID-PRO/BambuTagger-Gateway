@@ -5,6 +5,7 @@
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/pem.h>
+#include <mbedtls/version.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -153,7 +154,11 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
     mbedtls_x509write_crt_set_md_alg(&caCrt, MBEDTLS_MD_SHA256);
     mbedtls_x509write_crt_set_version(&caCrt, MBEDTLS_X509_CRT_VERSION_3);
 
+#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+    { unsigned char s[] = {1}; ret = mbedtls_x509write_crt_set_serial_raw(&caCrt, s, sizeof(s)); if (ret) break; }
+#else
     { mbedtls_mpi s; mbedtls_mpi_init(&s); mbedtls_mpi_lset(&s, 1); ret = mbedtls_x509write_crt_set_serial(&caCrt, &s); mbedtls_mpi_free(&s); if (ret) break; }
+#endif
 
     ret = mbedtls_x509write_crt_set_validity(&caCrt, "20260101000000", "20270101000000");
     if (ret) { printf("CERT: CA validity failed -0x%x\n", -ret); break; }
@@ -190,7 +195,11 @@ bool generateCertChain(const char *cn, uint8_t *certDer, size_t *certLen,
     mbedtls_x509write_crt_set_md_alg(&devCrt, MBEDTLS_MD_SHA256);
     mbedtls_x509write_crt_set_version(&devCrt, MBEDTLS_X509_CRT_VERSION_3);
 
+#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+    { unsigned char s[] = {2}; ret = mbedtls_x509write_crt_set_serial_raw(&devCrt, s, sizeof(s)); if (ret) break; }
+#else
     { mbedtls_mpi s; mbedtls_mpi_init(&s); mbedtls_mpi_lset(&s, 2); ret = mbedtls_x509write_crt_set_serial(&devCrt, &s); mbedtls_mpi_free(&s); if (ret) break; }
+#endif
 
     ret = mbedtls_x509write_crt_set_validity(&devCrt, "20260101000000", "20270101000000");
     if (ret) { printf("CERT: dev validity failed -0x%x\n", -ret); break; }

@@ -2,7 +2,11 @@
 #include <string.h>
 #include <mbedtls/error.h>
 #include <mbedtls/cipher.h>
+#if __has_include(<mbedtls/ssl_misc.h>)
+#include <mbedtls/ssl_misc.h>
+#else
 #include <mbedtls/ssl_internal.h>
+#endif
 #include <aes/esp_aes.h>
 #include <aes/esp_aes_gcm.h>
 
