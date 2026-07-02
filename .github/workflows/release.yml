@@ -46,6 +46,9 @@ jobs:
         run: |
           pio run -e esp32-s3
 
+      - name: Fix firmware flash mode to QIO
+        run: python3 scripts/fix_qio.py .pio/build/esp32-s3/firmware.bin
+
       - name: Create merged binary
         run: |
           BUILD=".pio/build/esp32-s3"
@@ -64,11 +67,13 @@ jobs:
 
           MERGED="build/BambuTagger-Gateway_merged.bin"
 
+          # NOTE: --flash-mode deliberately omitted — it corrupts bootloader byte 2
+          # and invalidates its SHA-256 hash (ets_loader.c 78).
+          # firmware.bin is patched to QIO + hash recalculated separately.
           esptool.py \
             --chip esp32s3 \
             merge-bin \
             --output "$MERGED" \
-            --flash-mode qio \
             --flash-freq 80m \
             --flash-size 8MB \
             0x0      "$BOOT" \
