@@ -1,9 +1,5 @@
 # ============================================================
 #  BambuTagger-Gateway — Automatic Build & Release
-#  Compiles the ESP32-S3 firmware and publishes a GitHub
-#  Release every time a version tag (v*) is pushed.
-#  A normal push / PR to main only compiles (smoke test,
-#  no release).
 # ============================================================
 
 name: Build & Release
@@ -50,37 +46,23 @@ jobs:
         run: |
           pio run -e esp32-s3
 
-      - name: Patch binaries to QIO flash mode
+      - name: Create merged binary
         run: |
-          python3 -c '
-          import sys
-          for path in [
-              ".pio/build/esp32-s3/bootloader.bin",
-              ".pio/build/esp32-s3/firmware.bin",
-          ]:
-              with open(path, "rb") as f:
-                  data = bytearray(f.read())
-              old = {0x00: "QIO", 0x02: "DIO"}.get(data[2], hex(data[2]))
-              if data[2] != 0x00:
-                  data[2] = 0x00
-                  with open(path, "wb") as f:
-                      f.write(data)
-                  print(f"{path}: {old} -> QIO")
-              else:
-                  print(f"{path}: QIO (unchanged)")
-          '
+          BUILD=".pio/build/esp32-s3"
+          BOOT="$BUILD/bootloader.bin"
+          PART="$BUILD/partitions.bin"
+          APP="$BUILD/firmware.bin"
 
-      - name: Copy and rename artefacts
-        run: |
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 \
+            -name boot_app0.bin 2>/dev/null | head -1)
+          echo "boot_app0: $BOOT_APP0"
+
           mkdir -p build
-          cp "${{ github.workspace }}/.pio/build/esp32-s3/firmware.bin"         build/BambuTagger-Gateway.ino.bin
-          cp "${{ github.workspace }}/.pio/build/esp32-s3/bootloader.bin"       build/BambuTagger-Gateway.ino.bootloader.bin
-          cp "${{ github.workspace }}/.pio/build/esp32-s3/partitions.bin"        build/BambuTagger-Gateway.ino.partitions.bin
+          cp "$BOOT" build/bootloader.bin
+          cp "$PART" build/partitions.bin
+          cp "$APP"  build/firmware.bin
 
-          APP="${{ github.workspace }}/build/BambuTagger-Gateway.ino.bin"
-          BOOT="${{ github.workspace }}/build/BambuTagger-Gateway.ino.bootloader.bin"
-          PART="${{ github.workspace }}/build/BambuTagger-Gateway.ino.partitions.bin"
-          MERGED="${{ github.workspace }}/build/BambuTagger-Gateway_merged.bin"
+          MERGED="build/BambuTagger-Gateway_merged.bin"
 
           esptool.py \
             --chip esp32s3 \
@@ -89,23 +71,20 @@ jobs:
             --flash-mode qio \
             --flash-freq 80m \
             --flash-size 8MB \
-            0x0000   "$BOOT" \
+            0x0      "$BOOT" \
             0x8000   "$PART" \
+            0xe000   "$BOOT_APP0" \
             0x10000  "$APP"
 
           echo "=== Build artefacts ==="
-          ls -lh "${{ github.workspace }}/build/"
+          ls -lh build/
 
       - name: Upload firmware artefacts
         uses: actions/upload-artifact@v4
         with:
           name: BambuTagger-Gateway-firmware-${{ github.sha }}
           retention-days: 30
-          path: |
-            build/BambuTagger-Gateway.ino.bin
-            build/BambuTagger-Gateway.ino.bootloader.bin
-            build/BambuTagger-Gateway.ino.partitions.bin
-            build/BambuTagger-Gateway_merged.bin
+          path: build/*
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -114,9 +93,9 @@ jobs:
           name: "BambuTagger-Gateway ${{ github.ref_name }}"
           generate_release_notes: true
           files: |
-            build/BambuTagger-Gateway.ino.bin
-            build/BambuTagger-Gateway.ino.bootloader.bin
-            build/BambuTagger-Gateway.ino.partitions.bin
+            build/bootloader.bin
+            build/partitions.bin
+            build/firmware.bin
             build/BambuTagger-Gateway_merged.bin
           body: |
             ## Flashing instructions
@@ -127,18 +106,18 @@ jobs:
               write_flash 0x0 BambuTagger-Gateway_merged.bin
             ```
 
-            ### Manual — separate files
+            ### Manual — three separate files
             ```
             esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
               write_flash \
-              0x0000   BambuTagger-Gateway.ino.bootloader.bin \
-              0x8000   BambuTagger-Gateway.ino.partitions.bin \
-              0x10000  BambuTagger-Gateway.ino.bin
+              0x0      bootloader.bin \
+              0x8000   partitions.bin \
+              0x10000  firmware.bin
             ```
 
-            > **Board:** Seeed XIAO ESP32-S3 (or any ESP32-S3 module with ≥8 MB flash)
+            ### OTA
+            Upload `firmware.bin` via the web interface (Configuration → OTA Update).
+
+            > **Board:** Seeed XIAO ESP32-S3 (or any ESP32-S3 with ≥8 MB flash)
             > **Framework:** Arduino (PlatformIO)
             > **Flash:** 8 MB, QIO, 80 MHz
-
-            ### OTA Update
-            Upload `BambuTagger-Gateway.ino.bin` via the web interface (Configuration → OTA Update).
