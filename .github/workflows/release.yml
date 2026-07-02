@@ -51,6 +51,23 @@ jobs:
         run: |
           pio run -e esp32-s3
 
+      - name: Patch firmware.bin to QIO flash mode
+        run: |
+          python3 -c "
+          import sys
+          fw = '${{ github.workspace }}/.pio/build/esp32-s3/firmware.bin'
+          with open(fw, 'rb') as f:
+              data = bytearray(f.read())
+          if data[2] == 0x00:
+              print('Flash mode: QIO (correct)')
+          else:
+              old = data[2]
+              data[2] = 0x00
+              with open(fw, 'wb') as f:
+                  f.write(data)
+              print(f'Flash mode: patched from {old:#04x} to 0x00 (QIO)')
+          "
+
       - name: Copy and rename artefacts
         run: |
           mkdir -p build
@@ -85,7 +102,7 @@ jobs:
             ### Via esptool (USB)
             ```bash
             esptool.py --port /dev/ttyACM0 --baud 921600 \
-              write_flash 0x0 BambuTagger-Gateway.ino.bin
+              write_flash --flash_mode qio 0x0 BambuTagger-Gateway.ino.bin
             ```
 
             > **Board:** Seeed XIAO ESP32-S3 (or any ESP32-S3 module with ≥8 MB flash)
