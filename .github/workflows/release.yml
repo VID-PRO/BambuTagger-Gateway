@@ -50,6 +50,26 @@ jobs:
         run: |
           pio run -e esp32-s3
 
+      - name: Patch binaries to QIO flash mode
+        run: |
+          python3 -c '
+          import sys
+          for path in [
+              ".pio/build/esp32-s3/bootloader.bin",
+              ".pio/build/esp32-s3/firmware.bin",
+          ]:
+              with open(path, "rb") as f:
+                  data = bytearray(f.read())
+              old = {0x00: "QIO", 0x02: "DIO"}.get(data[2], hex(data[2]))
+              if data[2] != 0x00:
+                  data[2] = 0x00
+                  with open(path, "wb") as f:
+                      f.write(data)
+                  print(f"{path}: {old} -> QIO")
+              else:
+                  print(f"{path}: QIO (unchanged)")
+          '
+
       - name: Copy and rename artefacts
         run: |
           mkdir -p build
@@ -64,11 +84,11 @@ jobs:
 
           esptool.py \
             --chip esp32s3 \
-            merge_bin \
+            merge-bin \
             --output "$MERGED" \
-            --flash_mode qio \
-            --flash_freq 80m \
-            --flash_size 8MB \
+            --flash-mode qio \
+            --flash-freq 80m \
+            --flash-size 8MB \
             0x0000   "$BOOT" \
             0x8000   "$PART" \
             0x10000  "$APP"
