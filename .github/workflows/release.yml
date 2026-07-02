@@ -69,7 +69,7 @@ jobs:
             --flash_mode qio \
             --flash_freq 80m \
             --flash_size 8MB \
-            0x1000   "$BOOT" \
+            0x0000   "$BOOT" \
             0x8000   "$PART" \
             0x10000  "$APP"
 
@@ -111,7 +111,7 @@ jobs:
             ```
             esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
               write_flash \
-              0x1000   BambuTagger-Gateway.ino.bootloader.bin \
+              0x0000   BambuTagger-Gateway.ino.bootloader.bin \
               0x8000   BambuTagger-Gateway.ino.partitions.bin \
               0x10000  BambuTagger-Gateway.ino.bin
             ```
