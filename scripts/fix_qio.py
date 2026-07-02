@@ -1,10 +1,9 @@
 """Patch ESP32-S3 firmware image byte 2 to QIO and recalc checksum + SHA-256.
-
-Usage: python3 scripts/fix_qio.py path/to/firmware.bin
 """
 import hashlib
-import struct
 import sys
+
+from esptool.bin_image import LoadFirmwareImage
 
 
 def main():
@@ -21,23 +20,29 @@ def main():
         print(f"{path}: already QIO")
         return
 
+    # Parse image to get segment data
+    img = LoadFirmwareImage("esp32s3", path)
+
+    # Recalculate XOR checksum over all segment data
+    ck = 0xEF
+    for seg in img.segments:
+        for b in seg.data:
+            ck ^= b
+
+    # Find checksum position: the byte before the trailing SHA-256
+    chk_off = len(data) - 33
+    sha_off = len(data) - 32
+
+    # Patch byte 2
     data[2] = 0x00
 
-    segs = data[1]
-    pos = 8 + data[9]  # header + extended header
-    ck = 0xEF
-    for _ in range(segs):
-        if pos + 8 > len(data):
-            break
-        slen = struct.unpack_from("<I", data, pos + 4)[0]
-        pos += 8
-        for b in data[pos : pos + slen]:
-            ck ^= b
-        pos += slen
+    # Write new checksum
+    data[chk_off] = ck & 0xFF
 
-    data[-33] = ck & 0xFF
-    data[-32:] = b"\x00" * 32
-    data[-32:] = hashlib.sha256(data[:-32]).digest()
+    # Zero out old hash and recalculate over everything up to checksum
+    data[sha_off:] = b"\x00" * 32
+    h = hashlib.sha256(data[:sha_off]).digest()
+    data[sha_off:] = h
 
     with open(path, "wb") as f:
         f.write(data)
